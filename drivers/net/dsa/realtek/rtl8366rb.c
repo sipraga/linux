@@ -19,7 +19,6 @@
 #include <linux/irqdomain.h>
 #include <linux/irqchip/chained_irq.h>
 #include <linux/of_irq.h>
-#include <linux/regmap.h>
 
 #include "realtek.h"
 

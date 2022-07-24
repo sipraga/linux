@@ -11,6 +11,7 @@
 #include <linux/phy.h>
 #include <linux/platform_device.h>
 #include <linux/gpio/consumer.h>
+#include <linux/regmap.h>
 #include <net/dsa.h>
 
 #define REALTEK_HW_STOP_DELAY		25	/* msecs */
