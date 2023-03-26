@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+menuconfig A2B
+	tristate "Analog Devices A2B Support"
+	help
+	  A2B support.
+
+	  If unsure, say no.
+
+if A2B
+
+config A2B_AD24XX
+	tristate "AD24XX Support"
+	depends on OF
+	help
+	  AD24xx support.
+
+	  If unsure, say no.
+
+endif

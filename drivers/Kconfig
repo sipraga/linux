@@ -171,6 +171,8 @@ source "drivers/rpmsg/Kconfig"
 
 source "drivers/soundwire/Kconfig"
 
+source "drivers/a2b/Kconfig"
+
 source "drivers/soc/Kconfig"
 
 source "drivers/pmdomain/Kconfig"
