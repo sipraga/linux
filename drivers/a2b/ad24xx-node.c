@@ -469,6 +469,13 @@ static int ad24xx_new_structure(struct a2b_node *node)
 	unsigned int val;
 	int ret;
 
+	val = FIELD_PREP(A2B_DATCTL_DNS_MASK, !!node->num_dnslots) |
+	      FIELD_PREP(A2B_DATCTL_UPS_MASK, !!node->num_upslots);
+
+	ret = node->bus->ops->write(node->bus, node, A2B_DATCTL, val, 0);
+	if (ret)
+		return ret;
+
 	val = FIELD_PREP(A2B_CONTROL_MSTR_MASK, 1) |
 	      FIELD_PREP(A2B_CONTROL_NEWSTRCT_MASK, 1);
 

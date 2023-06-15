@@ -257,16 +257,6 @@ static int ad24xx_codec_hw_params(struct snd_pcm_substream *substream,
 			ret = a2b_func_write(adc->func, A2B_DNSLOTS, 16, 0);
 			if (ret)
 				return ret;
-
-			ret = a2b_func_read(adc->func, A2B_DATCTL, &val, 0);
-			if (ret)
-				return ret;
-
-			val |= A2B_DATCTL_DNS_MASK;
-
-			ret = a2b_func_write(adc->func, A2B_DATCTL, val, 0);
-			if (ret)
-				return ret;
 		}
 	} else {
 		return -EINVAL; // TODO
@@ -311,16 +301,6 @@ static int ad24xx_codec_hw_free(struct snd_pcm_substream *substream,
 				return ret;
 		} else {
 			ret = a2b_func_write(adc->func, A2B_DNSLOTS, 0, 0);
-			if (ret)
-				return ret;
-
-			ret = a2b_func_read(adc->func, A2B_DATCTL, &val, 0);
-			if (ret)
-				return ret;
-
-			val &= ~A2B_DATCTL_DNS_MASK;
-
-			ret = a2b_func_write(adc->func, A2B_DATCTL, val, 0);
 			if (ret)
 				return ret;
 		}
