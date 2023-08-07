@@ -16,6 +16,8 @@ typedef int (*GRAPH2_CUSTOM)(struct simple_util_priv *priv,
 struct graph2_custom_hooks {
 	int (*hook_pre)(struct simple_util_priv *priv);
 	int (*hook_post)(struct simple_util_priv *priv);
+	int (*hook_skip_link)(struct simple_util_priv *priv,
+			      struct device_node *lnk, int index);
 	GRAPH2_CUSTOM custom_normal;
 	GRAPH2_CUSTOM custom_dpcm;
 	GRAPH2_CUSTOM custom_c2c;

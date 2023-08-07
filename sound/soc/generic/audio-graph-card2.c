@@ -1323,6 +1323,7 @@ static int graph_for_each_link(struct simple_util_priv *priv,
 	struct device_node *lnk;
 	enum graph_type gtype;
 	int rc, ret;
+	int i = 0;
 
 	/* loop for all listed CPU port */
 	of_for_each_phandle(&it, rc, node, "links", NULL, 0) {
@@ -1330,9 +1331,15 @@ static int graph_for_each_link(struct simple_util_priv *priv,
 
 		gtype = graph_get_type(priv, lnk);
 
+		if (hooks && hooks->hook_skip_link)
+			if (hooks->hook_skip_link(priv, lnk, i))
+				continue;
+
 		ret = func(priv, hooks, gtype, lnk, li);
 		if (ret < 0)
 			return ret;
+
+		i++;
 	}
 
 	return 0;
