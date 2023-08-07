@@ -10,6 +10,7 @@
 #include <linux/device.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/notifier.h>
 
 /**
  * MISC
@@ -226,6 +227,26 @@ struct a2b_func *a2b_node_of_add_func(struct a2b_node *node,
 
 struct a2b_bus_ops;
 
+/**
+ * enum a2b_bus_status - A2B bus status bits
+ *
+ * @A2B_BUS_STATUS_DISCOVERING - discovery of the bus is in progress and the
+ * number of available nodes is not yet determined
+ */
+enum a2b_bus_status {
+	A2B_BUS_STATUS_DISCOVERING,
+	A2B_BUS_STATUS_END,
+};
+
+/**
+ * enum a2b_bus_event - events that are sent on the bus' blocking notifier chain
+ *
+ * @A2B_BUS_EVENT_DISCOVERY_DONE - discovery has finished
+ */
+enum a2b_bus_event {
+	A2B_BUS_EVENT_DISCOVERY_DONE,
+};
+
 struct a2b_bus {
 	/* A2B bus driver fills this in */
 	struct device *dev;
@@ -234,17 +255,28 @@ struct a2b_bus {
 
 	/* A2B core only */
 	int id;
+	struct list_head list;
 	struct mutex mutex;
+	unsigned int use_count;
 	unsigned int slotreqs[2];
 	struct a2b_node *nodes[A2B_MAX_NODES];
 	unsigned int respcycs[A2B_MAX_NODES];
+	unsigned long status;
 	struct delayed_work discovery_work;
 	enum a2b_tdm_mode tdm_mode;
 	enum a2b_tdm_slot_size tdm_slot_size;
+	struct blocking_notifier_head notifier;
 };
 
 int a2b_register_bus(struct a2b_bus *bus);
 void a2b_unregister_bus(struct a2b_bus *bus);
+struct a2b_bus *a2b_get_bus(struct device_node *np);
+void a2b_put_bus(struct a2b_bus *bus);
+unsigned long a2b_bus_status(struct a2b_bus *bus);
+unsigned int a2b_bus_num_subs(struct a2b_bus *bus);
+unsigned int a2b_bus_num_nodes(struct a2b_bus *bus);
+int a2b_bus_register_notifier(struct a2b_bus *bus, struct notifier_block *nb);
+int a2b_bus_unregister_notifier(struct a2b_bus *bus, struct notifier_block *nb);
 
 /**
  * enum a2b_rw_flags - A2B register access flags

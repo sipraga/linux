@@ -20,6 +20,8 @@
 
 static bool is_registered;
 static DEFINE_IDA(a2b_ida);
+static LIST_HEAD(a2b_bus_list);
+static DEFINE_MUTEX(a2b_bus_list_mutex);
 
 /**
  * MISC
@@ -232,17 +234,6 @@ err_clear_flag:
 }
 EXPORT_SYMBOL_GPL(a2b_bus_of_add_node);
 
-static unsigned int a2b_bus_num_subs(struct a2b_bus *bus)
-{
-	int i;
-
-	for (i = 0; i < A2B_MAX_NODES; i++)
-		if (!bus->nodes[i])
-			return i;
-
-	return 15;
-}
-
 static struct a2b_node *a2b_bus_last_node(struct a2b_bus *bus)
 {
 	struct a2b_node *node = bus->nodes[A2B_MAIN_ADDR];
@@ -256,6 +247,13 @@ static struct a2b_node *a2b_bus_last_node(struct a2b_bus *bus)
 	}
 
 	return node;
+}
+
+static void a2b_bus_event_discovery_done(struct a2b_bus *bus)
+{
+	clear_bit(A2B_BUS_STATUS_DISCOVERING, &bus->status);
+	blocking_notifier_call_chain(&bus->notifier,
+				     A2B_BUS_EVENT_DISCOVERY_DONE, NULL);
 }
 
 static void a2b_bus_discover(struct a2b_bus *bus)
@@ -281,6 +279,8 @@ static void a2b_bus_discover(struct a2b_bus *bus)
 	if (num_subs < expected_subs)
 		schedule_delayed_work(&bus->discovery_work,
 				      msecs_to_jiffies(100));
+	else
+		a2b_bus_event_discovery_done(bus);
 }
 
 int a2b_register_node(struct a2b_node *node)
@@ -521,7 +521,7 @@ static void a2b_bus_discovery_work(struct work_struct *work)
 	mutex_unlock(&bus->mutex);
 	if (ret) {
 		dev_err(bus->dev, "failed to apply new structure: %d\n", ret);
-		return;
+		goto out;
 	}
 
 	for (i = 0; i < A2B_MAX_NODES; i++) {
@@ -542,7 +542,7 @@ static void a2b_bus_discovery_work(struct work_struct *work)
 				       bus->respcycs[a2b_bus_num_subs(bus)]);
 	if (ret < 0) {
 		dev_err(bus->dev, "discovery error: %d\n", ret);
-		return;
+		goto out;
 	} else if (ret) {
 		struct a2b_node *last = a2b_bus_last_node(bus);
 
@@ -552,7 +552,7 @@ static void a2b_bus_discovery_work(struct work_struct *work)
 				ret);
 		}
 
-		return;
+		goto out;
 	}
 
 	/* Find where to place the new node */
@@ -564,7 +564,7 @@ static void a2b_bus_discovery_work(struct work_struct *work)
 	}
 
 	if (!new_node)
-		return;
+		goto out;
 
 	for_each_available_child_of_node(bus->dev->of_node, np) {
 		u32 addr;
@@ -580,7 +580,7 @@ static void a2b_bus_discovery_work(struct work_struct *work)
 
 	if (!found) {
 		dev_warn(bus->dev, "missing OF child node for %d\n", i);
-		return;
+		goto out;
 	}
 
 	*new_node = a2b_bus_of_add_node(bus, np, i);
@@ -589,26 +589,46 @@ static void a2b_bus_discovery_work(struct work_struct *work)
 		dev_err(bus->dev, "failed to add new node %d: %pe\n", i,
 			*new_node);
 		*new_node = NULL;
-		return;
+		goto out;
 	}
+
+out:
+	/*
+	 * If there is no new node after this discovery, then the discovery
+	 * process is finished. Signal the event.
+	 */
+	if (!new_node || !*new_node)
+		a2b_bus_event_discovery_done(bus);
 
 	return;
 }
 
 int a2b_register_bus(struct a2b_bus *bus)
 {
-	if (!bus->ops)
+	int ret = 0;
+
+	if (!bus->dev || !bus->ops)
 		return -EINVAL;
 
-	// TODO: subsystem-wide mutex here
-	bus->id = ida_alloc(&a2b_ida, GFP_KERNEL);
-	if (bus->id < 0)
-		return -ENOMEM;
+	mutex_lock(&a2b_bus_list_mutex);
 
 	mutex_init(&bus->mutex);
 	INIT_DELAYED_WORK(&bus->discovery_work, a2b_bus_discovery_work);
+	BLOCKING_INIT_NOTIFIER_HEAD(&bus->notifier);
+	set_bit(A2B_BUS_STATUS_DISCOVERING, &bus->status);
 
-	return 0;
+	bus->id = ida_alloc(&a2b_ida, GFP_KERNEL);
+	if (bus->id < 0) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	list_add(&bus->list, &a2b_bus_list);
+
+out:
+	mutex_unlock(&a2b_bus_list_mutex);
+
+	return ret;
 }
 EXPORT_SYMBOL_GPL(a2b_register_bus);
 
@@ -616,13 +636,90 @@ void a2b_unregister_bus(struct a2b_bus *bus)
 {
 	cancel_delayed_work_sync(&bus->discovery_work);
 
+	mutex_lock(&a2b_bus_list_mutex);
+
+	WARN_ON(bus->use_count);
+
 	a2b_unregister_node(bus->nodes[A2B_MAIN_ADDR]);
 	device_unregister(&bus->nodes[A2B_MAIN_ADDR]->dev);
-	bus->nodes[A2B_MAIN_ADDR] = NULL;
+
+	list_del(&bus->list);
 	ida_free(&a2b_ida, bus->id);
-	bus->id = 0;
+
+	mutex_unlock(&a2b_bus_list_mutex);
 }
 EXPORT_SYMBOL_GPL(a2b_unregister_bus);
+
+struct a2b_bus *a2b_get_bus(struct device_node *np)
+{
+	struct a2b_bus *bus, *found = NULL;
+
+	mutex_lock(&a2b_bus_list_mutex);
+
+	list_for_each_entry(bus, &a2b_bus_list, list) {
+		if (bus->dev->of_node == np) {
+			found = bus;
+			break;
+		}
+	}
+
+	if (found) {
+		get_device(found->dev);
+		found->use_count++;
+	}
+
+	mutex_unlock(&a2b_bus_list_mutex);
+
+	return found;
+}
+EXPORT_SYMBOL_GPL(a2b_get_bus);
+
+void a2b_put_bus(struct a2b_bus *bus)
+{
+	mutex_lock(&a2b_bus_list_mutex);
+
+	bus->use_count--;
+	put_device(bus->dev);
+
+	mutex_unlock(&a2b_bus_list_mutex);
+}
+EXPORT_SYMBOL_GPL(a2b_put_bus);
+
+unsigned long a2b_bus_status(struct a2b_bus *bus)
+{
+	return bus->status;
+}
+EXPORT_SYMBOL_GPL(a2b_bus_status);
+
+unsigned int a2b_bus_num_subs(struct a2b_bus *bus)
+{
+	int i;
+
+	for (i = 0; i < A2B_MAX_NODES; i++)
+		if (!bus->nodes[i])
+			return i;
+
+	return A2B_MAX_NODES - 1;
+}
+EXPORT_SYMBOL_GPL(a2b_bus_num_subs);
+
+unsigned int a2b_bus_num_nodes(struct a2b_bus *bus)
+{
+	return a2b_bus_num_subs(bus) + 1;
+}
+EXPORT_SYMBOL_GPL(a2b_bus_num_nodes);
+
+int a2b_bus_register_notifier(struct a2b_bus *bus, struct notifier_block *nb)
+{
+	return blocking_notifier_chain_register(&bus->notifier, nb);
+}
+EXPORT_SYMBOL_GPL(a2b_bus_register_notifier);
+
+int a2b_bus_unregister_notifier(struct a2b_bus *bus, struct notifier_block *nb)
+{
+	return blocking_notifier_chain_unregister(&bus->notifier, nb);
+}
+EXPORT_SYMBOL_GPL(a2b_bus_unregister_notifier);
 
 /**
  * BUS DRIVER
