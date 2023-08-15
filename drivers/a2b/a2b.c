@@ -105,6 +105,10 @@ static const char *a2b_error_to_string(enum a2b_error error)
 
 void a2b_node_report_error(struct a2b_node *node, enum a2b_error error)
 {
+	/* This error occurs during discovery and is not worth warning about */
+	if (error == A2B_PWRERR_3)
+		return;
+
 	dev_err_ratelimited(&node->dev, "A2B bus error %d: %s\n", error,
 			    a2b_error_to_string(error));
 }
@@ -251,6 +255,10 @@ static struct a2b_node *a2b_bus_last_node(struct a2b_bus *bus)
 
 static void a2b_bus_event_discovery_done(struct a2b_bus *bus)
 {
+	struct a2b_node *main = bus->nodes[A2B_MAIN_ADDR];
+
+	dev_info(&main->dev, "discovered %d subordinate nodes\n",
+		 a2b_bus_num_subs(bus));
 	clear_bit(A2B_BUS_STATUS_DISCOVERING, &bus->status);
 	blocking_notifier_call_chain(&bus->notifier,
 				     A2B_BUS_EVENT_DISCOVERY_DONE, NULL);

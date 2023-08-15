@@ -270,10 +270,10 @@ static int ad24xx_node_setup(struct a2b_node *node)
 	if (ret)
 		return ret;
 
-	dev_err(&node->dev,
-		"new %s node vendor 0x%02x prod 0x%02x ver 0x%02x\n",
-		is_a2b_main(node) ? "main" : "subordinate", vendor, product,
-		version);
+	dev_info(&node->dev,
+		 "new %s node vendor 0x%02x prod 0x%02x ver 0x%02x\n",
+		 is_a2b_main(node) ? "main" : "subordinate", vendor, product,
+		 version);
 
 	/* IRQ domain for GPIOs */
 	adn->irqdomain = irq_domain_add_linear(adn->dev->of_node, 8,
