@@ -2,6 +2,8 @@
 
 menuconfig A2B
 	tristate "Analog Devices A2B Support"
+	depends on OF
+	select REGMAP_A2B
 	help
 	  A2B support.
 
@@ -11,7 +13,6 @@ if A2B
 
 config A2B_AD24XX
 	tristate "AD24XX Support"
-	depends on OF
 	help
 	  AD24xx support.
 

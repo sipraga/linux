@@ -5,11 +5,12 @@
  * Copyright (c) 2023 Alvin Šipraga <alsi@bang-olufsen.dk>
  */
 
+#include <linux/a2b/a2b.h>
 #include <linux/a2b/ad24xx.h>
 #include <linux/bitfield.h>
 #include <linux/module.h>
+#include <linux/regmap.h>
 #include <sound/soc.h>
-#include <linux/a2b/a2b.h>
 
 #define AD24XX_RATES_SUB_48                                                   \
 	(/* SNDRV_PCM_RATE_{12000,24000} missing? | */ SNDRV_PCM_RATE_48000 | \
@@ -26,9 +27,10 @@ struct ad24xx_codec {
 	struct a2b_node *node;
 	struct regmap *regmap;
 	struct snd_soc_dai_driver *dai_drv;
+	struct a2b_slot_config slot_config;
 };
 
-static const char *const ad24xx_codec_slotfmt_text[] = {
+static const char *const ad24xx_codec_slot_format_text[] = {
 	"Normal Slot Format",
 	"Alternate Slot Format",
 };
@@ -38,23 +40,85 @@ static const char *const ad24xx_codec_slot_size_text[] = {
 	"24 bits", "28 bits", "32 bits",
 };
 
-static SOC_ENUM_SINGLE_DECL(ad24xx_codec_dn_slot_size_enum, A2B_SLOTFMT, 0,
-			    ad24xx_codec_slot_size_text);
-static SOC_ENUM_SINGLE_DECL(ad24xx_codec_dn_slotfmt_enum, A2B_SLOTFMT, 3,
-			    ad24xx_codec_slotfmt_text);
-static SOC_ENUM_SINGLE_DECL(ad24xx_codec_up_slot_size_enum, A2B_SLOTFMT, 4,
-			    ad24xx_codec_slot_size_text);
-static SOC_ENUM_SINGLE_DECL(ad24xx_codec_up_slotfmt_enum, A2B_SLOTFMT, 7,
-			    ad24xx_codec_slotfmt_text);
+static SOC_ENUM_SINGLE_VIRT_DECL(ad24xx_codec_dn_slot_size_enum,
+				 ad24xx_codec_slot_size_text);
+static SOC_ENUM_SINGLE_VIRT_DECL(ad24xx_codec_dn_slot_format_enum,
+				 ad24xx_codec_slot_format_text);
+static SOC_ENUM_SINGLE_VIRT_DECL(ad24xx_codec_up_slot_size_enum,
+				 ad24xx_codec_slot_size_text);
+static SOC_ENUM_SINGLE_VIRT_DECL(ad24xx_codec_up_slot_format_enum,
+				 ad24xx_codec_slot_format_text);
+
+static int ad24xx_codec_slot_config_get(struct snd_kcontrol *kcontrol,
+					struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *component =
+		snd_soc_kcontrol_component(kcontrol);
+	struct ad24xx_codec *adc = snd_soc_component_get_drvdata(component);
+	struct a2b_slot_config *slot_config = &adc->slot_config;
+	const struct soc_enum *priv = (void *)kcontrol->private_value;
+	unsigned int *val = &ucontrol->value.enumerated.item[0];
+
+	if (priv == &ad24xx_codec_dn_slot_size_enum)
+		*val = slot_config->size[A2B_DIR_DOWN];
+	else if (priv == &ad24xx_codec_dn_slot_format_enum)
+		*val = slot_config->format[A2B_DIR_DOWN];
+	else if (priv == &ad24xx_codec_up_slot_size_enum)
+		*val = slot_config->size[A2B_DIR_UP];
+	else if (priv == &ad24xx_codec_up_slot_format_enum)
+		*val = slot_config->format[A2B_DIR_UP];
+	else
+		return -ENOENT;
+
+	return 0;
+}
+
+static int ad24xx_codec_slot_config_put(struct snd_kcontrol *kcontrol,
+					struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *component =
+		snd_soc_kcontrol_component(kcontrol);
+	struct ad24xx_codec *adc = snd_soc_component_get_drvdata(component);
+	struct a2b_slot_config *slot_config = &adc->slot_config;
+	const struct soc_enum *priv = (void *)kcontrol->private_value;
+	unsigned int val = ucontrol->value.enumerated.item[0];
+	enum a2b_direction direction =
+		(priv == &ad24xx_codec_up_slot_size_enum ||
+		 priv == &ad24xx_codec_up_slot_format_enum) ?
+			A2B_DIR_UP :
+			A2B_DIR_DOWN;
+
+	if (priv == &ad24xx_codec_up_slot_size_enum ||
+	    priv == &ad24xx_codec_dn_slot_size_enum) {
+		if (val >= ARRAY_SIZE(ad24xx_codec_slot_size_text))
+			return -EINVAL;
+		slot_config->size[direction] = val;
+	} else if (priv == &ad24xx_codec_up_slot_format_enum ||
+		   priv == &ad24xx_codec_dn_slot_format_enum) {
+		if (val >= ARRAY_SIZE(ad24xx_codec_slot_format_text))
+			return -EINVAL;
+		slot_config->format[direction] = val;
+	} else
+		return -ENOENT;
+
+	return 0;
+}
 
 static const struct snd_kcontrol_new ad24xx_codec_controls_main[] = {
 	SOC_SINGLE("Downstream Slots", A2B_DNSLOTS, 0, 32, 0),
 	SOC_SINGLE("Upstream Slots", A2B_UPSLOTS, 0, 32, 0),
-	// WARNING: DON'T SET A2B_SLOTFMT WHILE PCM DEVICE OPEN, HORRIBLE NOISE
-	SOC_ENUM("Downstream Slot Size", ad24xx_codec_dn_slot_size_enum),
-	SOC_ENUM("Downstream Slot Format", ad24xx_codec_dn_slotfmt_enum),
-	SOC_ENUM("Upstream Slot Size", ad24xx_codec_up_slot_size_enum),
-	SOC_ENUM("Upstream Slot Format", ad24xx_codec_up_slotfmt_enum),
+	SOC_ENUM_EXT("Downstream Slot Size", ad24xx_codec_dn_slot_size_enum,
+		     ad24xx_codec_slot_config_get,
+		     ad24xx_codec_slot_config_put),
+	SOC_ENUM_EXT("Downstream Slot Format", ad24xx_codec_dn_slot_format_enum,
+		     ad24xx_codec_slot_config_get,
+		     ad24xx_codec_slot_config_put),
+	SOC_ENUM_EXT("Upstream Slot Size", ad24xx_codec_up_slot_size_enum,
+		     ad24xx_codec_slot_config_get,
+		     ad24xx_codec_slot_config_put),
+	SOC_ENUM_EXT("Upstream Slot Format", ad24xx_codec_up_slot_format_enum,
+		     ad24xx_codec_slot_config_get,
+		     ad24xx_codec_slot_config_put),
 };
 
 static const struct snd_kcontrol_new ad24xx_codec_controls_sub[] = {
@@ -108,68 +172,6 @@ static const struct snd_soc_dapm_route ad24xx_codec_dapm_routes_sub[] = {
 	{ "ENC", NULL, "RX1" },
 	{ "TX0", NULL, "DEC" },
 	{ "TX1", NULL, "DEC" },
-};
-
-static int ad24xx_codec_read(void *context, const void *reg_buf,
-			     size_t reg_size, void *val_buf, size_t val_size)
-{
-	struct ad24xx_codec *adc = context;
-	unsigned int reg;
-	u32 *val;
-	int ret;
-	int i;
-
-	if (reg_size != 1 || val_size > 4)
-		return -EINVAL;
-
-	reg = *((u8 *)reg_buf);
-	val = val_buf;
-	*val = 0;
-
-	for (i = 0; i < val_size; i++) {
-		unsigned int tmp;
-
-		ret = a2b_func_read(adc->func, reg + i, &tmp, 0);
-		if (ret)
-			return ret;
-
-		*val |= tmp << (i * 8);
-	}
-
-	return 0;
-}
-
-static int ad24xx_codec_write(void *context, const void *data, size_t count)
-{
-	struct ad24xx_codec *adc = context;
-	unsigned int reg;
-	int ret;
-	int i;
-
-	if (count > 5)
-		return -EINVAL;
-
-	reg = ((u8 *)data)[0];
-
-	for (i = 0; i < count - 1; i++) {
-		unsigned int tmp = ((u8 *)data)[i + 1];
-
-		ret = a2b_func_write(adc->func, reg + i, tmp, 0);
-		if (ret)
-			return ret;
-	}
-
-	return 0;
-}
-
-static const struct regmap_config ad24xx_codec_regmap_config = {
-	.reg_bits = 8,
-	.val_bits = 8,
-	.write = ad24xx_codec_write,
-	.read = ad24xx_codec_read,
-	.cache_type = REGCACHE_RBTREE,
-	.max_raw_read = 4,
-	.max_raw_write = 4,
 };
 
 static int ad24xx_codec_set_fmt(struct snd_soc_dai *dai, unsigned int fmt)
@@ -259,7 +261,9 @@ static void ad24xx_codec_shutdown(struct snd_pcm_substream *substream,
 {
 	struct snd_soc_component *component = dai->component;
 	struct ad24xx_codec *adc = snd_soc_component_get_drvdata(component);
-	int direction = substream->stream;
+	int direction = substream->stream == SNDRV_PCM_STREAM_PLAYBACK ?
+				A2B_DIR_DOWN :
+				A2B_DIR_UP;
 	int ret;
 
 	/*
@@ -267,11 +271,9 @@ static void ad24xx_codec_shutdown(struct snd_pcm_substream *substream,
 	 * same PCM runtime. If not, then the RESPCYCS may get set wrong and the
 	 * bus may malfunction.
 	 */
-	ret = a2b_node_request_slots(adc->node,
-				     direction == SNDRV_PCM_STREAM_PLAYBACK ?
-					     A2B_DIR_DOWN :
-					     A2B_DIR_UP,
-				     0);
+	ret = a2b_node_request_slots(adc->node, direction, 0,
+				     adc->slot_config.size[direction],
+				     adc->slot_config.format[direction]);
 	if (ret)
 		dev_err(adc->dev, "failed to free slots: %d\n", ret);
 }
@@ -282,10 +284,11 @@ static int ad24xx_codec_hw_params(struct snd_pcm_substream *substream,
 {
 	struct snd_soc_component *component = dai->component;
 	struct ad24xx_codec *adc = snd_soc_component_get_drvdata(component);
-	int direction = substream->stream;
+	enum a2b_direction direction =
+		substream->stream == SNDRV_PCM_STREAM_PLAYBACK ? A2B_DIR_DOWN :
+								 A2B_DIR_UP;
 	unsigned int rate = params_rate(params);
-	unsigned int num_dnslots;
-	unsigned int num_upslots;
+	unsigned int num_slots;
 	int ret;
 
 	/* Configure I2S/TDM rate */
@@ -326,21 +329,16 @@ static int ad24xx_codec_hw_params(struct snd_pcm_substream *substream,
 			return ret;
 	}
 
-	ret = regmap_read(adc->regmap, A2B_DNSLOTS, &num_dnslots);
-	if (ret)
-		return ret;
-
-	ret = regmap_read(adc->regmap, A2B_UPSLOTS, &num_upslots);
+	ret = regmap_read(adc->regmap,
+			  direction == A2B_DIR_DOWN ? A2B_DNSLOTS : A2B_UPSLOTS,
+			  &num_slots);
 	if (ret)
 		return ret;
 
 	/* Finally, request slots */
-	if (direction == SNDRV_PCM_STREAM_PLAYBACK)
-		ret = a2b_node_request_slots(adc->node, A2B_DIR_DOWN,
-					     num_dnslots);
-	else
-		ret = a2b_node_request_slots(adc->node, A2B_DIR_UP,
-					     num_upslots);
+	ret = a2b_node_request_slots(adc->node, direction, num_slots,
+				     adc->slot_config.size[direction],
+				     adc->slot_config.format[direction]);
 	if (ret)
 		return ret;
 
@@ -427,6 +425,12 @@ static const struct snd_soc_component_driver ad24xx_codec_component_drv_sub = {
 	.endianness = 1,
 };
 
+static const struct regmap_config ad24xx_codec_regmap_config = {
+	.reg_bits = 8,
+	.val_bits = 8,
+	.cache_type = REGCACHE_RBTREE,
+};
+
 static int ad24xx_codec_probe(struct device *dev)
 {
 	struct a2b_func *func = to_a2b_func(dev);
@@ -445,7 +449,7 @@ static int ad24xx_codec_probe(struct device *dev)
 	dev_set_drvdata(dev, adc);
 
 	adc->regmap =
-		devm_regmap_init(dev, NULL, adc, &ad24xx_codec_regmap_config);
+		devm_regmap_init_a2b_func(func, &ad24xx_codec_regmap_config);
 	if (IS_ERR(adc->regmap))
 		return PTR_ERR(adc->regmap);
 

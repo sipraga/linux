@@ -23,9 +23,8 @@ static int ad24xx_i2c_master_xfer(struct i2c_adapter *adap,
 {
 	struct ad24xx_i2c_master *adim = i2c_get_adapdata(adap);
 	struct a2b_node *node = adim->node;
-	struct a2b_bus *bus = node->bus;
 
-	return bus->ops->i2c_xfer(bus, node, msgs, num);
+	return a2b_node_i2c_xfer(node, msgs, num);
 }
 
 static u32 ad24xx_i2c_master_functionality(struct i2c_adapter *adap)
@@ -33,22 +32,13 @@ static u32 ad24xx_i2c_master_functionality(struct i2c_adapter *adap)
 	return I2C_FUNC_I2C | I2C_FUNC_SMBUS_EMUL;
 }
 
+static const struct i2c_adapter_quirks ad24xx_i2c_master_quirks = {
+	.flags = I2C_AQ_COMB | I2C_AQ_COMB_SAME_ADDR,
+};
+
 static const struct i2c_algorithm ad24xx_i2c_master_algo = {
 	.master_xfer = ad24xx_i2c_master_xfer,
 	.functionality = ad24xx_i2c_master_functionality,
-};
-
-static const struct i2c_adapter_quirks ad24xx_i2c_master_quirks = {
-	// TODO: The current a2b_bus_ops API only supports reading and writing a
-	// single 8-bit register with word size 8. The read/write ops should be
-	// split into read/write and read_i2c/write_i2c so that a raw struct
-	// *i2c_msg can be passed in. For now this should suffice to test access
-	// to the TLV320ADC3140 on a CA44 amp board. Likewise more messages can
-	// probably be crammed into the parent adapter so these quirks can go
-	// away entirely.
-	.max_num_msgs = 1,
-	.max_write_len = 1,
-	.max_read_len = 1,
 };
 
 static int ad24xx_i2c_master_probe(struct device *dev)
@@ -72,7 +62,8 @@ static int ad24xx_i2c_master_probe(struct device *dev)
 	adim->adap.algo = &ad24xx_i2c_master_algo;
 	adim->adap.dev.parent = dev;
 	adim->adap.dev.of_node = dev->of_node;
-	strscpy(adim->adap.name, "i2c-ad24xx", sizeof("i2c-ad24xx")); // TODO
+	adim->adap.quirks = &ad24xx_i2c_master_quirks;
+	strscpy(adim->adap.name, dev_name(dev), sizeof(adim->adap.name));
 	i2c_set_adapdata(&adim->adap, adim);
 
 	ret = of_property_read_u32(np, "clock-frequency", &bus_speed);
@@ -88,7 +79,7 @@ static int ad24xx_i2c_master_probe(struct device *dev)
 	val |= FIELD_PREP(A2B_I2CCFG_FRAMERATE_MASK,
 			  func->node->sff == A2B_SFF_44100 ? 1 : 0);
 
-	ret = a2b_func_write(func, A2B_I2CCFG, val, 0);
+	ret = a2b_node_write(func->node, A2B_I2CCFG, val);
 	if (ret)
 		return ret;
 

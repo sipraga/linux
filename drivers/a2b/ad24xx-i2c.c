@@ -20,11 +20,9 @@ struct ad24xx_i2c {
 	struct regmap *base_regmap;
 	struct regmap *bus_regmap;
 	struct a2b_bus a2b_bus;
-	struct a2b_node *a2b_node;
 	struct mutex mutex;
 	struct irq_domain *irqdomain;
 	int irq;
-
 	struct clk *sync_clk;
 };
 
@@ -46,34 +44,23 @@ static bool ad24xx_i2c_private_reg(unsigned int reg)
 	}
 }
 
-static int ad24xx_i2c_read_nolock(struct a2b_bus *a2b_bus,
-				  const struct a2b_node *node, unsigned int reg,
-				  unsigned int *val, int flags)
+static int __ad24xx_i2c_read(struct a2b_bus *a2b_bus,
+			     const struct a2b_node *node, unsigned int reg,
+			     unsigned int *val)
 {
 	struct ad24xx_i2c *ad = to_ad24xx_i2c(a2b_bus);
 	unsigned int nodeadr;
 	int ret;
 
-	/* Broadcast read is not supported and would make no sense anyway */
-	if (flags & A2B_RW_BROADCAST)
-		return -EINVAL;
-
-	if (flags & A2B_RW_I2CPERIPHERAL) {
-		/* Mains have only one I2C bus and we're using it right now */
-		if (node->addr == A2B_MAIN_ADDR)
-			return -EINVAL;
-	} else if (ad24xx_i2c_private_reg(reg)) {
+	if (ad24xx_i2c_private_reg(reg))
 		return -EACCES;
-	}
 
 	/* Main node access */
-	if (node->addr == A2B_MAIN_ADDR)
+	if (is_a2b_main(node))
 		return regmap_read(ad->base_regmap, reg, val);
 
 	/* Sub node access */
-	nodeadr = FIELD_PREP(A2B_NODEADR_NODE_MASK, node->addr) |
-		  FIELD_PREP(A2B_NODEADR_PERI_MASK,
-			     flags & A2B_RW_I2CPERIPHERAL ? 1 : 0);
+	nodeadr = FIELD_PREP(A2B_NODEADR_NODE_MASK, node->addr - 1);
 
 	ret = regmap_write(ad->base_regmap, A2B_NODEADR, nodeadr);
 	if (ret)
@@ -86,49 +73,35 @@ static int ad24xx_i2c_read_nolock(struct a2b_bus *a2b_bus,
 	return 0;
 }
 
-static int ad24xx_i2c_read(struct a2b_bus *a2b_bus,
-			   const struct a2b_node *node, unsigned int reg,
-			   unsigned int *val, int flags)
+static int ad24xx_i2c_read(struct a2b_bus *a2b_bus, const struct a2b_node *node,
+			   unsigned int reg, unsigned int *val)
 {
 	struct ad24xx_i2c *ad = to_ad24xx_i2c(a2b_bus);
 	int ret;
 
 	mutex_lock(&ad->mutex);
-	ret = ad24xx_i2c_read_nolock(a2b_bus, node, reg, val, flags);
+	ret = __ad24xx_i2c_read(a2b_bus, node, reg, val);
 	mutex_unlock(&ad->mutex);
 	return ret;
 }
 
-static int ad24xx_i2c_write_nolock(struct a2b_bus *a2b_bus,
-			    const struct a2b_node *node, unsigned int reg,
-			    unsigned int val, int flags)
+static int __ad24xx_i2c_write(struct a2b_bus *a2b_bus,
+			      const struct a2b_node *node, unsigned int reg,
+			      unsigned int val)
 {
 	struct ad24xx_i2c *ad = to_ad24xx_i2c(a2b_bus);
 	unsigned int nodeadr;
 	int ret;
 
-	if (flags & A2B_RW_I2CPERIPHERAL) {
-		/* Mains have only one I2C bus and we're using it right now */
-		if (!node)
-			return -EINVAL;
-
-		/* I2C broadcast writes are not supported by the hardware */
-		if (flags & A2B_RW_BROADCAST)
-			return -EINVAL;
-	} else if (ad24xx_i2c_private_reg(reg)) {
+	if (ad24xx_i2c_private_reg(reg))
 		return -EACCES;
-	}
 
 	/* Main node access */
-	if (node->addr == A2B_MAIN_ADDR)
+	if (is_a2b_main(node))
 		return regmap_write(ad->base_regmap, reg, val);
 
 	/* Sub node access */
-	nodeadr = FIELD_PREP(A2B_NODEADR_NODE_MASK, node->addr) |
-		  FIELD_PREP(A2B_NODEADR_PERI_MASK,
-			     flags & A2B_RW_I2CPERIPHERAL ? 1 : 0) |
-		  FIELD_PREP(A2B_NODEADR_BRCST_MASK,
-			     flags & A2B_RW_BROADCAST ? 1 : 0);
+	nodeadr = FIELD_PREP(A2B_NODEADR_NODE_MASK, node->addr - 1);
 
 	ret = regmap_write(ad->base_regmap, A2B_NODEADR, nodeadr);
 	if (ret)
@@ -143,13 +116,13 @@ static int ad24xx_i2c_write_nolock(struct a2b_bus *a2b_bus,
 
 static int ad24xx_i2c_write(struct a2b_bus *a2b_bus,
 			    const struct a2b_node *node, unsigned int reg,
-			    unsigned int val, int flags)
+			    unsigned int val)
 {
 	struct ad24xx_i2c *ad = to_ad24xx_i2c(a2b_bus);
 	int ret;
 
 	mutex_lock(&ad->mutex);
-	ret = ad24xx_i2c_write_nolock(a2b_bus, node, reg, val, flags);
+	ret = __ad24xx_i2c_write(a2b_bus, node, reg, val);
 	mutex_unlock(&ad->mutex);
 	return ret;
 }
@@ -158,43 +131,52 @@ static int ad24xx_i2c_xfer(struct a2b_bus *a2b_bus, const struct a2b_node *node,
 			   struct i2c_msg *msgs, int num)
 {
 	struct ad24xx_i2c *ad = to_ad24xx_i2c(a2b_bus);
+	struct i2c_msg msgs2[2];
+	unsigned int nodeadr;
 	int ret;
 	int i;
 
 	/* Mains only have one I2C interface and it operates in slave mode */
-	if (node->addr == A2B_MAIN_ADDR)
+	if (is_a2b_main(node))
 		return -EINVAL;
+
+	/*
+	 * Enforce some basic assumptions this function makes about the
+	 * transfer. If this proves insufficient, some more complex logic will
+	 * be needed.
+	 */
+	if (num > 2 || (num == 2 && msgs[0].addr != msgs[1].addr))
+		return -EOPNOTSUPP;
+
+	/* Modify the messages to use the I2C address of the BUS client */
+	for (i = 0; i < num; i++) {
+		msgs2[i] = msgs[i];
+		msgs2[i].addr = ad->bus_client->addr;
+	}
 
 	mutex_lock(&ad->mutex);
 
-	for (i = 0; i < num; i++) {
-		struct i2c_msg *msg = &msgs[i];
-		unsigned int nodeadr;
+	/* Set I2C peripheral address in subordinate node */
+	nodeadr = FIELD_PREP(A2B_NODEADR_NODE_MASK, node->addr - 1);
 
-		/* Set I2C peripheral address in subordinate node */
-		nodeadr = FIELD_PREP(A2B_NODEADR_NODE_MASK, node->addr);
+	ret = regmap_write(ad->base_regmap, A2B_NODEADR, nodeadr);
+	if (ret)
+		goto out;
 
-		ret = regmap_write(ad->base_regmap, A2B_NODEADR, nodeadr);
-		if (ret)
-			goto out;
+	ret = regmap_write(ad->bus_regmap, A2B_CHIP, msgs[0].addr);
+	if (ret)
+		goto out;
 
-		ret = regmap_write(ad->bus_regmap, A2B_CHIP, msg->addr);
-		if (ret)
-			goto out;
+	/* Set peripheral bit */
+	nodeadr |= FIELD_PREP(A2B_NODEADR_PERI_MASK, 1);
 
-		/* Set peripheral bit */
-		nodeadr |= FIELD_PREP(A2B_NODEADR_PERI_MASK, 1);
+	ret = regmap_write(ad->base_regmap, A2B_NODEADR, nodeadr);
+	if (ret)
+		goto out;
 
-		ret = regmap_write(ad->base_regmap, A2B_NODEADR, nodeadr);
-		if (ret)
-			goto out;
-
-		/* Execute raw I2C transfer on the dummy BUS client */
-		ret = i2c_transfer_buffer_flags(ad->bus_client, msg->buf,
-						msg->len, msg->flags);
-		if (ret < 0)
-			goto out;
-	}
+	ret = i2c_transfer(ad->bus_client->adapter, msgs2, num);
+	if (ret < 0)
+		goto out;
 
 out:
 	mutex_unlock(&ad->mutex);
@@ -205,34 +187,24 @@ out:
 	return num;
 }
 
-static void ad24xx_i2c_lock(struct a2b_bus *a2b_bus)
-{
-	struct ad24xx_i2c *ad = to_ad24xx_i2c(a2b_bus);
-	mutex_lock(&ad->mutex);
-}
-
-static void ad24xx_i2c_unlock(struct a2b_bus *a2b_bus)
-{
-	struct ad24xx_i2c *ad = to_ad24xx_i2c(a2b_bus);
-	mutex_unlock(&ad->mutex);
-}
-
 static int ad24xx_i2c_get_inttype(struct a2b_bus *a2b_bus,
 				  unsigned int *val)
 {
 	struct ad24xx_i2c *ad = to_ad24xx_i2c(a2b_bus);
-	return regmap_read(ad->base_regmap, A2B_INTTYPE, val);
+	int ret;
+
+	mutex_lock(&ad->mutex);
+	ret = regmap_read(ad->base_regmap, A2B_INTTYPE, val);
+	mutex_unlock(&ad->mutex);
+
+	return ret;
 }
 
 struct a2b_bus_ops ad24xx_i2c_a2b_bus_ops = {
-	.lock = ad24xx_i2c_lock,
-	.unlock = ad24xx_i2c_unlock,
 	.read = ad24xx_i2c_read,
 	.write = ad24xx_i2c_write,
 	.i2c_xfer = ad24xx_i2c_xfer,
 	.get_inttype = ad24xx_i2c_get_inttype,
-	.read_nolock = ad24xx_i2c_read_nolock,
-	.write_nolock = ad24xx_i2c_write_nolock,
 };
 
 static irqreturn_t ad24xx_i2c_irq_handler(int irq, void *data)
@@ -242,7 +214,9 @@ static irqreturn_t ad24xx_i2c_irq_handler(int irq, void *data)
 	unsigned int virq = 0;
 	int ret;
 
+	mutex_lock(&ad->mutex);
 	ret = regmap_read(ad->base_regmap, A2B_INTSRC, &val);
+	mutex_unlock(&ad->mutex);
 	if (ret) {
 		dev_err_ratelimited(
 			ad->dev, "failed to read interrupt source: %d\n", ret);
@@ -251,10 +225,10 @@ static irqreturn_t ad24xx_i2c_irq_handler(int irq, void *data)
 
 
 	if (val & A2B_INTSRC_MSTINT_MASK)
-		virq = irq_find_mapping(ad->irqdomain, 15);
+		virq = irq_find_mapping(ad->irqdomain, 0);
 	else if (val & A2B_INTSRC_SLVINT_MASK)
 		virq = irq_find_mapping(ad->irqdomain,
-					val & A2B_INTSRC_INODE_MASK);
+					(val & A2B_INTSRC_INODE_MASK) + 1);
 
 	if (!virq)
 		return IRQ_NONE;
@@ -299,7 +273,7 @@ static void devm_ad24xx_i2c_release_irqdomain(void *data)
 	int virq;
 	int i;
 
-	for (i = 0; i < 17; i++) {
+	for (i = 0; i < A2B_MAX_NODES; i++) {
 		virq = irq_find_mapping(irqdomain, i);
 		if (virq)
 			irq_dispose_mapping(virq);
@@ -319,8 +293,7 @@ static int ad24xx_i2c_irq_setup(struct ad24xx_i2c *ad)
 	    intsize != 1)
 		return -EINVAL;
 
-	/* 17 - up to 16 subs and 1 main */
-	ad->irqdomain = irq_domain_add_linear(ad->dev->of_node, 17,
+	ad->irqdomain = irq_domain_add_linear(ad->dev->of_node, A2B_MAX_NODES,
 					      &ad24xx_i2c_irqdomain_ops, ad);
 	if (!ad->irqdomain)
 		return -ENOMEM;
@@ -339,14 +312,12 @@ static int ad24xx_i2c_irq_setup(struct ad24xx_i2c *ad)
 	return 0;
 }
 
-static int ad24xx_i2c_node_setup(struct ad24xx_i2c *ad)
+static int ad24xx_i2c_bus_setup(struct ad24xx_i2c *ad)
 {
 	struct device *dev = ad->dev;
-	struct a2b_node *node;
-	struct device_node *np;
 	int ret;
 
-	ad->a2b_bus.dev = dev;
+	ad->a2b_bus.parent = dev;
 	ad->a2b_bus.ops = &ad24xx_i2c_a2b_bus_ops;
 	ad->a2b_bus.priv = ad;
 
@@ -354,46 +325,29 @@ static int ad24xx_i2c_node_setup(struct ad24xx_i2c *ad)
 	if (ret)
 		return ret;
 
-	np = of_get_child_by_name(ad->dev->of_node, "main");
-	if (!np)
-		return -EINVAL;
-
-	node = a2b_bus_of_add_node(&ad->a2b_bus, np, A2B_MAIN_ADDR);
-	of_node_put(np);
-	if (IS_ERR(node))
-		return PTR_ERR(node);
-
-	ad->a2b_node = node;
-
 	return 0;
 }
 
-static int ad24xx_i2c_reset(struct ad24xx_i2c *ad)
-{
-	return regmap_write(ad->base_regmap, A2B_CONTROL,
-			    A2B_CONTROL_SOFTRST_MASK);
-}
-
 static const struct regmap_config ad24xx_i2c_base_regmap_config = {
+	.disable_locking = true,
 	.reg_bits = 8,
 	.val_bits = 8,
 	.reg_stride = 1,
-	.max_register = 0x9B,
-	/* .disable_locking = true, */
-	/* .lock = _ad24xx_i2c_lock, */
-	/* .unlock = _ad24xx_i2c_unlock, */
+	.max_register = A2B_REG_MAX,
 };
 
 static const struct regmap_config ad24xx_i2c_bus_regmap_config = {
+	.disable_locking = true,
 	.reg_bits = 8,
 	.val_bits = 8,
 	.reg_stride = 1,
-	.max_register = 0xFF,
+	.max_register = A2B_REG_MAX,
 };
 
 static void ad24xx_i2c_remove(struct i2c_client *client)
 {
 	struct ad24xx_i2c *ad = i2c_get_clientdata(client);
+
 	a2b_unregister_bus(&ad->a2b_bus);
 }
 
@@ -430,6 +384,15 @@ static int ad24xx_i2c_probe(struct i2c_client *client)
 	ad->base_client = client;
 	mutex_init(&ad->mutex);
 
+	/* Optionally enable regulators for VIN or for out-of-band bus power */
+	ret = devm_regulator_get_enable_optional(dev, "vin");
+	if (ret && ret != -ENODEV)
+		return ret;
+
+	ret = devm_regulator_get_enable_optional(dev, "bus");
+	if (ret && ret != -ENODEV)
+		return ret;
+
 	ad->base_regmap =
 		devm_regmap_init_i2c(ad->base_client, base_regmap_config);
 	if (IS_ERR(ad->base_regmap))
@@ -461,15 +424,11 @@ static int ad24xx_i2c_probe(struct i2c_client *client)
 	if (IS_ERR(ad->sync_clk))
 		return PTR_ERR(ad->sync_clk);
 
-	ret = ad24xx_i2c_reset(ad);
-	if (ret)
-		return ret;
-
 	ret = ad24xx_i2c_irq_setup(ad);
 	if (ret)
 		return ret;
 
-	ret = ad24xx_i2c_node_setup(ad);
+	ret = ad24xx_i2c_bus_setup(ad);
 	if (ret)
 		return ret;
 
@@ -477,11 +436,21 @@ static int ad24xx_i2c_probe(struct i2c_client *client)
 }
 
 static const struct of_device_id ad24xx_i2c_of_match_table[] = {
-	{ .compatible = "adi,ad2403", },
-	{ .compatible = "adi,ad2410", },
-	{ .compatible = "adi,ad2425", },
-	{ .compatible = "adi,ad2428", },
-	{ .compatible = "adi,ad2429", },
+	{
+		.compatible = "adi,ad2403",
+	},
+	{
+		.compatible = "adi,ad2410",
+	},
+	{
+		.compatible = "adi,ad2425",
+	},
+	{
+		.compatible = "adi,ad2428",
+	},
+	{
+		.compatible = "adi,ad2429",
+	},
 	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, ad24xx_i2c_of_match_table);

@@ -19,10 +19,12 @@
 #include <linux/interrupt.h>
 #include <linux/module.h>
 #include <linux/of_irq.h>
+#include <linux/regmap.h>
 
 struct ad24xx_node {
 	struct device *dev;
 	struct a2b_node *node;
+	struct regmap *regmap;
 	struct irq_domain *irqdomain;
 	int irq;
 	struct completion running_completion;
@@ -118,7 +120,7 @@ static int ad24xx_node_irqdomain_alloc(struct irq_domain *irqdomain,
 	if (nr_irqs != 1)
 		return -EINVAL;
 
-	if (hwirq > 8)
+	if (hwirq > AD24XX_MAX_GPIOS)
 		return -EINVAL;
 
 	return irq_domain_set_hwirq_and_chip(irqdomain, virq, hwirq,
@@ -139,7 +141,7 @@ static void devm_ad24xx_node_release_irqdomain(void *data)
 	int virq;
 	int i;
 
-	for (i = 0; i < 17; i++) {
+	for (i = 0; i < A2B_MAX_NODES; i++) {
 		virq = irq_find_mapping(irqdomain, i);
 		if (virq)
 			irq_dispose_mapping(virq);
@@ -157,7 +159,7 @@ static irqreturn_t ad24xx_node_irq_handler(int irq, void *data)
 	unsigned int virq;
 	int ret;
 
-	ret = node->bus->ops->get_inttype(node->bus, &inttype);
+	ret = a2b_node_get_inttype(node, &inttype);
 	if (ret) {
 		dev_err_ratelimited(adn->dev,
 				    "failed to get interrupt type: %d\n", ret);
@@ -229,7 +231,138 @@ static irqreturn_t ad24xx_node_irq_handler(int irq, void *data)
 	}
 }
 
-static int ad24xx_node_setup_i2sgcfg(struct ad24xx_node *adn)
+int ad24xx_node_set_respcycs(struct a2b_node *node, unsigned int respcycs)
+{
+	struct ad24xx_node *adn = node->priv;
+	int ret;
+
+	dev_dbg(&node->dev, "set RESPCYCS %d\n", respcycs);
+
+	ret = regmap_write(adn->regmap, A2B_RESPCYCS, respcycs);
+	if (ret)
+		return ret;
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(ad24xx_node_set_respcycs);
+
+int ad24xx_node_set_switching(struct a2b_node *node, bool enable,
+			      enum a2b_swmode mode)
+{
+	struct ad24xx_node *adn = node->priv;
+	unsigned int val;
+	int ret;
+
+	val = FIELD_PREP(A2B_SWCTL_ENSW_MASK, !!enable) |
+	      FIELD_PREP(A2B_SWCTL_MODE_MASK, mode);
+
+	ret = regmap_write(adn->regmap, A2B_SWCTL, val);
+	if (ret)
+		return ret;
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(ad24xx_node_set_switching);
+
+int ad24xx_node_discover(struct a2b_node *node, unsigned int respcycs)
+{
+	struct ad24xx_node *adn = node->priv;
+	int ret;
+	unsigned long timeout;
+
+	ret = regmap_write(adn->regmap, A2B_DISCVRY, respcycs);
+	if (ret)
+		return ret;
+
+	timeout = wait_for_completion_interruptible_timeout(
+		&adn->discovery_completion, msecs_to_jiffies(350));
+	reinit_completion(&adn->discovery_completion);
+	if (timeout < 0)
+		return timeout;
+	else if (timeout == 0) {
+		/*
+		 * On discovery timeout it is necessary to manually end the
+		 * discovery process by setting the ENDDSC bit. Empirically, the
+		 * following issues were observed when failing to do so:
+		 *
+		 *  - the A2B_DISCSTAT.DSCACT bit will remain indefinitely set;
+		 *  - the main node will fail to report a bus drop error
+		 *    properly; namely, it will signal SRFERRs but only set its
+		 *    LAST bit when switching is disabled;
+		 *  - subsequent attempts to rediscover the first subordinate
+		 *    node will succeed (insofar as a DSCDONE interrupt will
+		 *    arrive), but I2C access to the node's registers over the
+		 *    BUS client will always fail.
+		 */
+		ret = regmap_set_bits(adn->regmap, A2B_CONTROL,
+				      A2B_CONTROL_ENDDSC_MASK);
+		if (ret)
+			return ret;
+
+		return 1;
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(ad24xx_node_discover);
+
+int ad24xx_node_new_structure(struct a2b_node *node,
+			      const struct a2b_slot_config *slot_config)
+{
+	struct ad24xx_node *adn = node->priv;
+	unsigned int val;
+	int ret;
+
+	/*
+	 * Synchronize A2B slot sizes and formats with all downstream nodes. The
+	 * A2B_SLOTFMT register is main only and with auto-broadcast, meaning
+	 * that the written value is automatically propagated to all downstream
+	 * subordinate nodes.
+	 */
+	val = FIELD_PREP(A2B_SLOTFMT_DNSIZE_MASK,
+			 slot_config->size[A2B_DIR_DOWN]) |
+	      FIELD_PREP(A2B_SLOTFMT_DNFMT_MASK,
+			 slot_config->format[A2B_DIR_DOWN]) |
+	      FIELD_PREP(A2B_SLOTFMT_DNSIZE_MASK,
+			 slot_config->size[A2B_DIR_UP]) |
+	      FIELD_PREP(A2B_SLOTFMT_DNFMT_MASK,
+			 slot_config->format[A2B_DIR_UP]);
+
+	ret = regmap_write(adn->regmap, A2B_SLOTFMT, val);
+	if (ret)
+		return ret;
+
+	val = FIELD_PREP(A2B_DATCTL_DNS_MASK, !!node->num_dnslots) |
+	      FIELD_PREP(A2B_DATCTL_UPS_MASK, !!node->num_upslots);
+
+	ret = regmap_write(adn->regmap, A2B_DATCTL, val);
+	if (ret)
+		return ret;
+
+	ret = regmap_set_bits(adn->regmap, A2B_CONTROL,
+			      A2B_CONTROL_NEWSTRCT_MASK);
+	if (ret)
+		return ret;
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(ad24xx_node_new_structure);
+
+int ad24xx_node_is_last(struct a2b_node *node)
+{
+	struct ad24xx_node *adn = node->priv;
+	unsigned int val;
+	int ret;
+
+	ret = regmap_read(adn->regmap, A2B_NODE, &val);
+	if (ret)
+		return ret;
+
+	return val & A2B_NODE_LAST_MASK ? 1 : 0;
+}
+EXPORT_SYMBOL_GPL(ad24xx_node_is_last);
+
+int ad24xx_node_setup_i2sgcfg(struct ad24xx_node *adn)
 {
 	struct a2b_node *node = adn->node;
 	unsigned int val = 0;
@@ -242,41 +375,87 @@ static int ad24xx_node_setup_i2sgcfg(struct ad24xx_node *adn)
 	val |= FIELD_PREP(A2B_I2SGCFG_EARLY_MASK, node->early_sync);
 	val |= FIELD_PREP(A2B_I2SGCFG_INV_MASK, node->invert_sync);
 
-	ret = node->bus->ops->write(node->bus, node, A2B_I2SGCFG, val, 0);
+	ret = regmap_write(adn->regmap, A2B_I2SGCFG, val);
 	if (ret)
 		return ret;
 
 	return 0;
 }
 
-static int ad24xx_node_setup(struct a2b_node *node)
+static bool ad24xx_node_precious_reg(struct device *dev, unsigned int reg)
 {
-	struct ad24xx_node *adn = node->priv;
-	struct device_node *np;
-	unsigned int vendor, product, version;
+	switch (reg) {
+	case A2B_INTTYPE:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static const struct regmap_config ad24xx_node_regmap_config = {
+	.reg_bits = 8,
+	.val_bits = 8,
+	.precious_reg = ad24xx_node_precious_reg,
+	.max_register = A2B_REG_MAX,
+};
+
+int ad24xx_node_setup(struct a2b_node *node)
+{
+	struct device *dev = &node->dev;
+	struct device_node *np = dev->of_node;
+	struct ad24xx_node *adn;
 	unsigned long timeout;
 	int ret;
 
+	adn = devm_kzalloc(dev, sizeof(*adn), GFP_KERNEL);
+	if (!adn)
+		return -ENOMEM;
+
+	adn->regmap =
+		devm_regmap_init_a2b_node(node, &ad24xx_node_regmap_config);
+	if (IS_ERR(adn->regmap))
+		return PTR_ERR(adn->regmap);
+
+	ret = of_a2b_parse_tdm_mode(np, &node->tdm_mode);
+	if (ret)
+		return -EINVAL;
+
+	ret = of_a2b_parse_tdm_slot_size(np, &node->tdm_slot_size);
+	if (ret)
+		return -EINVAL;
+
+	if (of_find_property(np, "adi,invert-sync", NULL))
+		node->invert_sync = 1;
+	if (of_find_property(np, "adi,early-sync", NULL))
+		node->early_sync = 1;
+	if (of_find_property(np, "adi,alternating-sync", NULL))
+		node->alternating_sync = 1;
+	if (of_find_property(np, "adi,rx-on-dtx1", NULL))
+		node->rx_on_dtx1 = 1;
+
+	node->priv = adn;
+
+	adn->dev = dev;
+	adn->node = node;
+	init_completion(&adn->running_completion);
+	init_completion(&adn->discovery_completion);
+
 	/* Identify */
-	ret = node->bus->ops->read(node->bus, node, A2B_VENDOR, &vendor, 0);
+	ret = regmap_read(adn->regmap, A2B_VENDOR, &node->vendor);
 	if (ret)
 		return ret;
 
-	ret = node->bus->ops->read(node->bus, node, A2B_PRODUCT, &product, 0);
+	ret = regmap_read(adn->regmap, A2B_PRODUCT, &node->product);
 	if (ret)
 		return ret;
 
-	ret = node->bus->ops->read(node->bus, node, A2B_VERSION, &version, 0);
+	ret = regmap_read(adn->regmap, A2B_VERSION, &node->version);
 	if (ret)
 		return ret;
-
-	dev_info(&node->dev,
-		 "new %s node vendor 0x%02x prod 0x%02x ver 0x%02x\n",
-		 is_a2b_main(node) ? "main" : "subordinate", vendor, product,
-		 version);
 
 	/* IRQ domain for GPIOs */
-	adn->irqdomain = irq_domain_add_linear(adn->dev->of_node, 8,
+	adn->irqdomain = irq_domain_add_linear(adn->dev->of_node,
+					       AD24XX_MAX_GPIOS,
 					       &ad24xx_node_irqdomain_ops, adn);
 	if (!adn->irqdomain)
 		return -ENOMEM;
@@ -302,18 +481,18 @@ static int ad24xx_node_setup(struct a2b_node *node)
 	 * on subordinate nodes will require them to be re-discovered.
 	 */
 	if (is_a2b_main(node)) {
-		ret = node->bus->ops->write(node->bus, node, A2B_CONTROL,
-					    A2B_CONTROL_SOFTRST_MASK, 0);
+		ret = regmap_set_bits(adn->regmap, A2B_CONTROL,
+				      A2B_CONTROL_SOFTRST_MASK);
 		if (ret)
 			return ret;
 	}
 
 	/* Enable interrupts */
-	ret = node->bus->ops->write(node->bus, node, A2B_INTMSK0, 0xFF, 0);
+	ret = regmap_write(adn->regmap, A2B_INTMSK0, 0xFF);
 	if (ret)
 		return ret;
 
-	ret = node->bus->ops->write(node->bus, node, A2B_INTMSK1, 0xFF, 0);
+	ret = regmap_write(adn->regmap, A2B_INTMSK1, 0xFF);
 	if (ret)
 		return ret;
 
@@ -322,18 +501,18 @@ static int ad24xx_node_setup(struct a2b_node *node)
 		 * Enable master (main) bit and wait for the transceiver to lock
 		 * its PLL to the received SYNC signal.
 		 */
-		ret = node->bus->ops->write(node->bus, node, A2B_CONTROL,
-					    A2B_CONTROL_MSTR_MASK, 0);
+		ret = regmap_set_bits(adn->regmap, A2B_CONTROL,
+				      A2B_CONTROL_MSTR_MASK);
 		if (ret)
 			return ret;
 
 		/*
 		 * Per the datasheet [2] Table 3, "Clock and Reset Timing (A2B
-		 * Master)", the typical PLL Lock Time t_PLK is 7.5 ms. Wait 10
+		 * Master)", the typical PLL Lock Time t_PLK is 7.5 ms. Wait 30
 		 * ms to be on the safe side and avoid spurious timeouts.
 		 */
 		timeout = wait_for_completion_interruptible_timeout(
-			&adn->running_completion, msecs_to_jiffies(10));
+			&adn->running_completion, msecs_to_jiffies(30));
 		reinit_completion(&adn->running_completion);
 		if (timeout < 0)
 			return timeout;
@@ -347,17 +526,14 @@ static int ad24xx_node_setup(struct a2b_node *node)
 		 * to be reported via the I2C adapter associated with the BUS
 		 * client of the main node. This prevents many spurious
 		 * interrupts during e.g. i2cdetect -r.
-		 *
-		 * TODO: Double check that the above is indeed OK.
 		 */
-		ret = node->bus->ops->write(node->bus, node, A2B_INTMSK2, 0x0D,
-					    0);
+		ret = regmap_write(adn->regmap, A2B_INTMSK2, 0x0D);
 		if (ret)
 			return ret;
 	}
 
 	/*
-	 * Set the global I2S cnofiguration. For main nodes, the Technical
+	 * Set the global I2S configuration. For main nodes, the Technical
 	 * Reference [1] is clear that this register must be set before
 	 * discovery and must not be modified thereafter. For subordinate nodes
 	 * there is no such restriction.
@@ -404,172 +580,57 @@ err_codec:
 
 	return ret;
 }
+EXPORT_SYMBOL_GPL(ad24xx_node_setup);
 
-static void ad24xx_node_teardown(struct a2b_node *node)
+void ad24xx_node_teardown(struct a2b_node *node)
 {
 	struct ad24xx_node *adn = node->priv;
 
-	// TODO: Ugly. Ought to be moved to the core.
 	if (adn->func_i2c)
 		device_unregister(&adn->func_i2c->dev);
 	if (adn->func_codec)
 		device_unregister(&adn->func_codec->dev);
 	if (adn->func_gpio)
 		device_unregister(&adn->func_gpio->dev);
+
+	/*
+	 * Reset the switch control register to disable any switching. This
+	 * might fail - particularly if this node is being torn down as a result
+	 * of a bus drop. But if the driver is just being unbound from the node
+	 * device, switching should be disabled so that on any rebind, the
+	 * discovery process can continue from this node. Otherwise there is a
+	 * possibility that the switching is never toggled off, which is a
+	 * prerequisite for rediscovery.
+	 */
+	regmap_write(adn->regmap, A2B_SWCTL, 0);
 }
-
-static int ad24xx_node_set_respcycs(struct a2b_node *node,
-				    unsigned int respcycs)
-{
-	int ret;
-
-	dev_dbg(&node->dev, "set RESPCYCS %d\n", respcycs);
-
-	ret = node->bus->ops->write(node->bus, node, A2B_RESPCYCS, respcycs, 0);
-	if (ret)
-		return ret;
-
-	return 0;
-}
-
-static int ad24xx_node_set_switching(struct a2b_node *node, unsigned int value)
-{
-	int ret;
-
-	ret = node->bus->ops->write(node->bus, node, A2B_SWCTL, value, 0);
-	if (ret)
-		return ret;
-
-	return 0;
-}
-
-static int ad24xx_node_discover(struct a2b_node *node, unsigned int respcycs)
-{
-	struct ad24xx_node *adn = node->priv;
-	int ret;
-	unsigned long timeout;
-
-	ret = node->bus->ops->write(node->bus, node, A2B_DISCVRY, respcycs, 0);
-	if (ret)
-		return ret;
-
-	timeout = wait_for_completion_interruptible_timeout(
-		&adn->discovery_completion, msecs_to_jiffies(350));
-	reinit_completion(&adn->discovery_completion);
-	if (timeout < 0)
-		return timeout;
-	else if (timeout == 0)
-		return 1;
-
-	return 0;
-}
-
-static int ad24xx_new_structure(struct a2b_node *node)
-{
-	unsigned int val;
-	int ret;
-
-	val = FIELD_PREP(A2B_DATCTL_DNS_MASK, !!node->num_dnslots) |
-	      FIELD_PREP(A2B_DATCTL_UPS_MASK, !!node->num_upslots);
-
-	ret = node->bus->ops->write(node->bus, node, A2B_DATCTL, val, 0);
-	if (ret)
-		return ret;
-
-	val = FIELD_PREP(A2B_CONTROL_MSTR_MASK, 1) |
-	      FIELD_PREP(A2B_CONTROL_NEWSTRCT_MASK, 1);
-
-	ret = node->bus->ops->write(node->bus, node, A2B_CONTROL, val, 0);
-	if (ret)
-		return ret;
-
-	return 0;
-}
+EXPORT_SYMBOL_GPL(ad24xx_node_teardown);
 
 static struct a2b_node_ops ad24xx_sub_ops = {
-	.setup = ad24xx_node_setup,
-	.teardown = ad24xx_node_teardown,
 	.set_respcycs = ad24xx_node_set_respcycs,
 	.set_switching = ad24xx_node_set_switching,
+	.is_last = ad24xx_node_is_last,
+	.setup = ad24xx_node_setup,
+	.teardown = ad24xx_node_teardown,
 };
 
 static struct a2b_node_ops ad24xx_main_ops = {
-	.setup = ad24xx_node_setup,
-	.teardown = ad24xx_node_teardown,
 	.set_respcycs = ad24xx_node_set_respcycs,
 	.set_switching = ad24xx_node_set_switching,
 	.discover = ad24xx_node_discover,
-	.new_structure = ad24xx_new_structure,
+	.new_structure = ad24xx_node_new_structure,
+	.is_last = ad24xx_node_is_last,
+	.setup = ad24xx_node_setup,
+	.teardown = ad24xx_node_teardown,
 };
 
 static int ad24xx_node_probe(struct device *dev)
 {
 	struct a2b_node *node = to_a2b_node(dev);
-	struct ad24xx_node *adn;
 	int ret;
 
-	adn = devm_kzalloc(dev, sizeof(*adn), GFP_KERNEL);
-	if (!adn)
-		return -ENOMEM;
-
-	if (node->addr == A2B_MAIN_ADDR) {
-		struct device_node *np = dev->of_node;
-
-		node->ops = &ad24xx_main_ops;
-
-		ret = of_a2b_parse_tdm_mode(np, &node->tdm_mode);
-		if (ret)
-			return -EINVAL;
-
-		ret = of_a2b_parse_tdm_slot_size(np, &node->tdm_slot_size);
-		if (ret)
-			return -EINVAL;
-
-		if (of_find_property(np, "adi,invert-sync", NULL))
-			node->invert_sync = 1;
-		if (of_find_property(np, "adi,early-sync", NULL))
-			node->early_sync = 1;
-		if (of_find_property(np, "adi,alternating-sync", NULL))
-			node->alternating_sync = 1;
-		if (of_find_property(np, "adi,rx-on-dtx1", NULL))
-			node->rx_on_dtx1 = 1;
-
-		// TODO: SLOTFMT is hardcoded to 32 bit uncompressed up/down for
-		// now. Should be made into kcontrols or DT properties, possibly
-		// on the codec to be requested via the slots API?
-		node->upfmt = 0;
-		node->dnfmt = 0;
-		node->upss = 6;
-		node->dnss = 6;
-	} else {
-		struct device_node *np = dev->of_node;
-		struct a2b_node *main = node->bus->nodes[A2B_MAIN_ADDR];
-
-		node->ops = &ad24xx_sub_ops;
-
-		/* Inherit main node TDM settings if not present */
-		if (of_a2b_parse_tdm_mode(np, &node->tdm_mode))
-			node->tdm_mode = main->tdm_mode;
-		if (of_a2b_parse_tdm_slot_size(np, &node->tdm_slot_size))
-			node->tdm_slot_size = main->tdm_slot_size;
-
-		/* These configurations can vary on subordinate nodes */
-		if (of_find_property(np, "adi,invert-sync", NULL))
-			node->invert_sync = 1;
-		if (of_find_property(np, "adi,early-sync", NULL))
-			node->early_sync = 1;
-		if (of_find_property(np, "adi,alternating-sync", NULL))
-			node->alternating_sync = 1;
-		if (of_find_property(np, "adi,rx-on-dtx1", NULL))
-			node->rx_on_dtx1 = 1;
-	}
-
-	node->priv = adn;
-
-	adn->dev = dev;
-	adn->node = node;
-	init_completion(&adn->running_completion);
-	init_completion(&adn->discovery_completion);
+	node->ops = is_a2b_main(node) ? &ad24xx_main_ops : &ad24xx_sub_ops;
+	node->chip_info = of_device_get_match_data(dev);
 
 	ret = a2b_register_node(node);
 	if (ret)

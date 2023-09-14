@@ -11,13 +11,13 @@
 #include <linux/interrupt.h>
 #include <linux/module.h>
 #include <linux/of_irq.h>
-
-#define AD24XX_MAX_GPIOS 8
+#include <linux/regmap.h>
 
 struct ad24xx_gpio {
 	struct device *dev;
 	struct a2b_func *func;
 	struct a2b_node *node;
+	struct regmap *regmap;
 	int irqs[AD24XX_MAX_GPIOS];
 	struct gpio_chip gpio_chip;
 	struct irq_chip irq_chip;
@@ -32,7 +32,7 @@ static int ad24xx_gpio_get_direction(struct gpio_chip *gc, unsigned int offset)
 	unsigned int val;
 	int ret;
 
-	ret = a2b_func_read(adg->func, A2B_GPIOOEN, &val, 0);
+	ret = regmap_read(adg->regmap, A2B_GPIOOEN, &val);
 	if (ret)
 		return ret;
 
@@ -48,7 +48,7 @@ static int ad24xx_gpio_get(struct gpio_chip *gc, unsigned int offset)
 	unsigned int val;
 	int ret;
 
-	ret = a2b_func_read(adg->func, A2B_GPIOIN, &val, 0);
+	ret = regmap_read(adg->regmap, A2B_GPIOIN, &val);
 	if (ret)
 		return ret;
 
@@ -64,34 +64,22 @@ static void ad24xx_gpio_set(struct gpio_chip *gc, unsigned int offset,
 	struct ad24xx_gpio *adg = gpiochip_get_data(gc);
 	unsigned int reg = value ? A2B_GPIODATSET : A2B_GPIODATCLR;
 
-	a2b_func_write(adg->func, reg, BIT(offset), 0);
+	regmap_write(adg->regmap, reg, BIT(offset));
 }
 
 static int ad24xx_gpio_set_direction(struct ad24xx_gpio *adg,
 				     unsigned int offset,
 				     unsigned int direction)
 {
-	unsigned int ival, oval;
+	unsigned int mask = BIT(offset);
+	unsigned int ival = direction ? BIT(offset) : 0;
 	int ret;
 
-	ret = a2b_func_read(adg->func, A2B_GPIOIEN, &ival, 0);
+	ret = regmap_update_bits(adg->regmap, A2B_GPIOIEN, mask, ival);
 	if (ret)
 		return ret;
 
-	/* Compute input enable value */
-	if (direction)
-		ival |= BIT(offset); /* input */
-	else
-		ival &= ~BIT(offset); /* output */
-
-	/* Naturally, output enable value is the opposite */
-	oval = (~ival) & 0xFF;
-
-	ret = a2b_func_write(adg->func, A2B_GPIOIEN, ival, 0);
-	if (ret)
-		return ret;
-
-	ret = a2b_func_write(adg->func, A2B_GPIOOEN, oval, 0);
+	ret = regmap_update_bits(adg->regmap, A2B_GPIOOEN, mask, ~ival);
 	if (ret)
 		return ret;
 
@@ -181,11 +169,11 @@ static void ad24xx_gpio_irq_bus_sync_unlock(struct irq_data *d)
 	struct ad24xx_gpio *adg = gpiochip_get_data(gpio_chip);
 	int ret;
 
-	ret = a2b_func_write(adg->func, A2B_PINTINV, adg->irq_invert, 0);
+	ret = regmap_write(adg->regmap, A2B_PINTINV, adg->irq_invert);
 	if (ret)
 		goto out;
 
-	ret = a2b_func_write(adg->func, A2B_PINTEN, adg->irq_enable, 0);
+	ret = regmap_write(adg->regmap, A2B_PINTEN, adg->irq_enable);
 	if (ret)
 		goto out;
 
@@ -208,6 +196,11 @@ static const struct irq_chip ad24xx_gpio_irq_chip = {
 	GPIOCHIP_IRQ_RESOURCE_HELPERS,
 };
 
+static const struct regmap_config ad24xx_gpio_regmap_config = {
+	.reg_bits = 8,
+	.val_bits = 8,
+};
+
 static int ad24xx_gpio_probe(struct device *dev)
 {
 	struct a2b_func *func = to_a2b_func(dev);
@@ -222,6 +215,11 @@ static int ad24xx_gpio_probe(struct device *dev)
 	adg = devm_kzalloc(dev, sizeof(*adg), GFP_KERNEL);
 	if (!adg)
 		return -ENOMEM;
+
+	adg->regmap =
+		devm_regmap_init_a2b_func(func, &ad24xx_gpio_regmap_config);
+	if (IS_ERR(adg->regmap))
+		return PTR_ERR(adg->regmap);
 
 	adg->dev = dev;
 	adg->func = func;
@@ -238,7 +236,7 @@ static int ad24xx_gpio_probe(struct device *dev)
 		return -ENOENT;
 
 	gpio_chip = &adg->gpio_chip;
-	gpio_chip->label = "ad24xx";
+	gpio_chip->label = dev_name(dev);
 	gpio_chip->parent = dev;
 	gpio_chip->fwnode = fwnode;
 	gpio_chip->owner = THIS_MODULE;
@@ -260,7 +258,7 @@ static int ad24xx_gpio_probe(struct device *dev)
 	irq_chip->default_type = IRQ_TYPE_NONE;
 
 	/* Initialize all GPIOs as inputs for high impedance state */
-	ret = a2b_func_write(func, A2B_GPIOIEN, 0xFF, 0);
+	ret = regmap_write(adg->regmap, A2B_GPIOIEN, 0xFF);
 	if (ret)
 		return ret;
 
