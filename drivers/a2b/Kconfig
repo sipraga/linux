@@ -18,4 +18,15 @@ config A2B_AD24XX
 
 	  If unsure, say no.
 
+config A2B_BEO_SHAPE_NODE
+	tristate "Bang & Olufsen Beosound Shape A2B node driver"
+	depends on A2B_AD24XX
+	help
+	  Adds support for the AD2425-based Beosound Shape. The driver handles
+	  firmware update of the STM32 MCU on the Shape board. After any
+	  firmware update, the driver falls back to the behaviour of the generic
+	  driver.
+
+	  If unsure, say no.
+
 endif
