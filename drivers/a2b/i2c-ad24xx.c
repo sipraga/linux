@@ -60,7 +60,15 @@ static int ad24xx_i2c_master_probe(struct device *dev)
 
 	adim->adap.owner = THIS_MODULE;
 	adim->adap.algo = &ad24xx_i2c_master_algo;
-	adim->adap.dev.parent = dev;
+	/*
+	 * FIXME/HELP WANTED: This horrible parent assignment fixes a lockdep
+	 * warning. Namely, if we were to set adap.dev.parent = dev; then the
+	 * calculation in i2c_adapter_depth() would be incorrect due to the
+	 * adapter parent not being an i2c_adapter. Instead, set the adapter
+	 * parent to be the i2c_adapter on which the main node is
+	 * connected. Surely there's a more elegant solution...
+	 */
+	adim->adap.dev.parent = dev->parent->parent->parent->parent;
 	adim->adap.dev.of_node = dev->of_node;
 	adim->adap.quirks = &ad24xx_i2c_master_quirks;
 	strscpy(adim->adap.name, dev_name(dev), sizeof(adim->adap.name));
