@@ -210,32 +210,44 @@ struct a2b_bus_ops ad24xx_i2c_a2b_bus_ops = {
 static irqreturn_t ad24xx_i2c_irq_handler(int irq, void *data)
 {
 	struct ad24xx_i2c *ad = data;
+	bool handled = false;
 	unsigned int val;
-	unsigned int virq = 0;
+	unsigned int virq;
 	int ret;
 
-	mutex_lock(&ad->mutex);
-	ret = regmap_read(ad->base_regmap, A2B_INTSRC, &val);
-	mutex_unlock(&ad->mutex);
-	if (ret) {
-		dev_err_ratelimited(
-			ad->dev, "failed to read interrupt source: %d\n", ret);
-		return IRQ_NONE;
+	/*
+	 * The transceiver asserts the IRQ line as long as there are pending
+	 * interrupts. Process them all here so that the interrupt can be
+	 * configured with an edge trigger.
+	 */
+	while (true) {
+		mutex_lock(&ad->mutex);
+		ret = regmap_read(ad->base_regmap, A2B_INTSRC, &val);
+		mutex_unlock(&ad->mutex);
+		if (ret) {
+			dev_err_ratelimited(
+				ad->dev,
+				"failed to read interrupt source: %d\n", ret);
+			break;
+		}
+
+		if (val & A2B_INTSRC_MSTINT_MASK)
+			virq = irq_find_mapping(ad->irqdomain, 0);
+		else if (val & A2B_INTSRC_SLVINT_MASK)
+			virq = irq_find_mapping(ad->irqdomain,
+						(val & A2B_INTSRC_INODE_MASK) +
+							1);
+		else
+			virq = 0;
+
+		if (!virq)
+			break;
+
+		handle_nested_irq(virq);
+		handled = true;
 	}
 
-
-	if (val & A2B_INTSRC_MSTINT_MASK)
-		virq = irq_find_mapping(ad->irqdomain, 0);
-	else if (val & A2B_INTSRC_SLVINT_MASK)
-		virq = irq_find_mapping(ad->irqdomain,
-					(val & A2B_INTSRC_INODE_MASK) + 1);
-
-	if (!virq)
-		return IRQ_NONE;
-
-	handle_nested_irq(virq);
-
-	return IRQ_HANDLED;
+	return handled ? IRQ_HANDLED : IRQ_NONE;
 }
 
 static const struct irq_chip ad24xx_i2c_irq_chip = {
