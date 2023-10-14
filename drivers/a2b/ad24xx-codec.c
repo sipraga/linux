@@ -143,35 +143,39 @@ static const struct snd_kcontrol_new ad24xx_codec_controls_sub[] = {
 	SND_SOC_DAPM_INIT_REG_VAL(wreg, wshift, winvert), }
 
 static const struct snd_soc_dapm_widget ad24xx_codec_dapm_widgets_main[] = {
-	SND_SOC_DAPM_AIF_IN("RX0", "I2S Playback", 0, A2B_I2SCFG, 4, 0),
-	SND_SOC_DAPM_AIF_IN("RX1", "I2S Playback", 0, A2B_I2SCFG, 5, 0),
-	SND_SOC_DAPM_AIF_OUT("TX0", "I2S Capture", 0, A2B_I2SCFG, 0, 0),
-	SND_SOC_DAPM_AIF_OUT("TX1", "I2S Capture", 0, A2B_I2SCFG, 1, 0),
+	SND_SOC_DAPM_AIF_IN("RX0", NULL, 0, A2B_I2SCFG, 4, 0),
+	SND_SOC_DAPM_AIF_IN("RX1", NULL, 0, A2B_I2SCFG, 5, 0),
+	SND_SOC_DAPM_AIF_OUT("TX0", NULL, 0, A2B_I2SCFG, 0, 0),
+	SND_SOC_DAPM_AIF_OUT("TX1", NULL, 0, A2B_I2SCFG, 1, 0),
 	SND_SOC_DAPM_ENCODER("ENC", NULL, SND_SOC_NOPM, 0, 0),
 	SND_SOC_DAPM_DECODER("DEC", NULL, SND_SOC_NOPM, 0, 0),
 };
 
 static const struct snd_soc_dapm_widget ad24xx_codec_dapm_widgets_sub[] = {
-	SND_SOC_DAPM_AIF_OUT("TX0", "I2S Playback", 0, A2B_I2SCFG, 0, 0),
-	SND_SOC_DAPM_AIF_OUT("TX1", "I2S Playback", 0, A2B_I2SCFG, 1, 0),
-	SND_SOC_DAPM_AIF_IN("RX0", "I2S Capture", 0, A2B_I2SCFG, 4, 0),
-	SND_SOC_DAPM_AIF_IN("RX1", "I2S Capture", 0, A2B_I2SCFG, 5, 0),
+	SND_SOC_DAPM_AIF_OUT("TX0", NULL, 0, A2B_I2SCFG, 0, 0),
+	SND_SOC_DAPM_AIF_OUT("TX1", NULL, 0, A2B_I2SCFG, 1, 0),
+	SND_SOC_DAPM_AIF_IN("RX0", NULL, 0, A2B_I2SCFG, 4, 0),
+	SND_SOC_DAPM_AIF_IN("RX1", NULL, 0, A2B_I2SCFG, 5, 0),
 	SND_SOC_DAPM_ENCODER("ENC", NULL, SND_SOC_NOPM, 0, 0),
 	SND_SOC_DAPM_DECODER("DEC", NULL, SND_SOC_NOPM, 0, 0),
 };
 
 static const struct snd_soc_dapm_route ad24xx_codec_dapm_routes_main[] = {
-	{ "ENC", NULL, "RX0" },
-	{ "ENC", NULL, "RX1" },
-	{ "TX0", NULL, "DEC" },
-	{ "TX1", NULL, "DEC" },
+	{ "I2S Capture", NULL, "DEC" },
+	{ "TX0", NULL, "I2S Capture" },
+	{ "TX1", NULL, "I2S Capture" },
+	{ "I2S Playback", NULL, "RX0" },
+	{ "I2S Playback", NULL, "RX1" },
+	{ "ENC", NULL, "I2S Playback" },
 };
 
 static const struct snd_soc_dapm_route ad24xx_codec_dapm_routes_sub[] = {
-	{ "ENC", NULL, "RX0" },
-	{ "ENC", NULL, "RX1" },
-	{ "TX0", NULL, "DEC" },
-	{ "TX1", NULL, "DEC" },
+	{ "ENC", NULL, "I2S Capture" },
+	{ "I2S Capture", NULL, "RX0" },
+	{ "I2S Capture", NULL, "RX1" },
+	{ "TX0", NULL, "I2S Playback" },
+	{ "TX1", NULL, "I2S Playback" },
+	{ "I2S Playback", NULL, "DEC" },
 };
 
 static int ad24xx_codec_set_fmt(struct snd_soc_dai *dai, unsigned int fmt)
