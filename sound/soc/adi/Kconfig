@@ -19,3 +19,15 @@ config SND_SOC_ADI_AXI_SPDIF
 	select REGMAP_MMIO
 	help
 	  ASoC driver for the Analog Devices AXI-SPDIF softcore peripheral.
+
+config SND_SOC_A2B_AUDIO_GRAPH_CARD2
+       tristate "A2B Audio Graph Card2 driver"
+       depends on SND_AUDIO_GRAPH_CARD2
+       help
+         Generic ASoC driver for sound cards using Analog Devices A2B buses.
+	 As well as supporting the same DT bindings as the Audio Graph Card2,
+	 the driver supports conditional link and route creation based on the
+	 state of the A2B bus after discovery.
+
+	 Say Y or M if you are experimenting with A2B audio and want to build
+	 a simple sound card.

@@ -1,0 +1,384 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * A custom audio-graph-card2 driver for A2B sound cards
+ *
+ * The card will defer its probe until the A2B bus has finished its discovery
+ * process, after which any absent codecs will be skipped without error.
+ *
+ * Copyright (c) 2023 Alvin Šipraga <alsi@bang-olufsen.dk>
+ */
+
+#include <linux/a2b/a2b.h>
+#include <linux/limits.h>
+#include <linux/module.h>
+#include <linux/of_graph.h>
+#include <linux/platform_device.h>
+#include <sound/graph_card.h>
+#include <sound/simple_card_utils.h>
+#include <linux/version.h>
+
+struct a2b_graph_priv {
+	struct device *dev;
+	struct simple_util_priv simple_priv;
+	struct device_node *a2b_np;
+	struct a2b_bus *a2b_bus;
+	struct notifier_block a2b_nb;
+	struct completion a2b_completion;
+	int a2b_nodes;
+};
+
+#define simple_to_a2b_graph(simple) \
+	container_of((simple), struct a2b_graph_priv, simple_priv)
+
+static int a2b_graph_dpcm_set_dailink_name(struct a2b_graph_priv *priv,
+					   struct snd_soc_dai_link *dai_link)
+{
+	struct simple_util_priv *simple_priv = &priv->simple_priv;
+	struct snd_soc_card *card = simple_priv_to_card(simple_priv);
+	struct device *dev = priv->dev;
+	int i;
+
+	if (!dai_link->name)
+		return -EINVAL;
+
+	/* HACK: Add a numerical index to prevent naming collisions. */
+
+	for (i = 0; i < card->num_links; i++)
+		if (&card->dai_link[i] == dai_link)
+			break;
+
+	WARN_ON(i == card->num_links);
+
+	return simple_util_set_dailink_name(dev, dai_link, "%s.%d",
+					    dai_link->name, i);
+}
+
+static int a2b_graph_parse_routes(struct a2b_graph_priv *priv,
+				  struct device_node *lnk)
+{
+	struct simple_util_priv *simple_priv = &priv->simple_priv;
+	struct snd_soc_card *card = simple_priv_to_card(simple_priv);
+	struct device_node *np = of_node_get(lnk);
+	struct snd_soc_dapm_route *routes;
+	int num_routes;
+	int ret = 0;
+	int i;
+
+	num_routes = of_property_count_strings(np, "routing");
+	if (num_routes < 0)
+		goto out;
+	else if (num_routes & 1) {
+		ret = -EINVAL;
+		goto out;
+	}
+	num_routes /= 2;
+
+	/*
+	 * HACK: The (void *) cast is necessary to discard the const-ness of
+	 * snd_soc_card::of_dapm_routes. This is safe because we know it is also
+	 * allocated dyanmically via devm_kcalloc() in
+	 * snd_soc_of_parse_audio_routing().
+	 */
+	routes = devm_krealloc(card->dev, (void *)card->of_dapm_routes,
+			       sizeof(*routes) *
+				       (card->num_of_dapm_routes + num_routes),
+			       GFP_KERNEL);
+	if (!routes) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	for (i = 0; i < num_routes; i++) {
+		int j = card->num_of_dapm_routes + i; /* offset into routes */
+
+		ret = of_property_read_string_index(np, "routing", 2 * i,
+						    &routes[j].sink);
+		if (ret)
+			goto out;
+
+		ret = of_property_read_string_index(np, "routing", (2 * i) + 1,
+						    &routes[j].source);
+		if (ret)
+			goto out;
+	}
+
+	card->of_dapm_routes = routes;
+	card->num_of_dapm_routes += num_routes;
+
+out:
+	of_node_put(np);
+
+	return ret;
+}
+
+static int a2b_graph_dpcm(struct simple_util_priv *simple_priv,
+			  struct device_node *lnk, struct link_info *li)
+{
+	struct a2b_graph_priv *priv = simple_to_a2b_graph(simple_priv);
+	struct snd_soc_dai_link *dai_link =
+		simple_priv_to_link(simple_priv, li->link);
+	int ret;
+
+	ret = audio_graph2_link_dpcm(simple_priv, lnk, li);
+	if (ret)
+		return ret;
+
+	/* Add any conditional routes necessary for this link */
+	ret = a2b_graph_parse_routes(priv, lnk);
+	if (ret)
+		return ret;
+
+	/* Name the link uniquely to avoid collisions */
+	ret = a2b_graph_dpcm_set_dailink_name(priv, dai_link);
+	if (ret)
+		return ret;
+
+	return 0;
+}
+
+static int a2b_graph_hook_skip_link(struct simple_util_priv *simple_priv,
+				    struct device_node *lnk, int index)
+{
+	struct a2b_graph_priv *priv = simple_to_a2b_graph(simple_priv);
+	struct device_node *ep;
+	struct device_node *np;
+	u32 reg = U32_MAX;
+	bool skip = false;
+
+	/*
+	 * Check which A2B node the codec lives on. If that node has not been
+	 * discovered, the link will be skipped. A2B node 0 is the main node.
+	 *
+	 * Consider this example where two links l0 and l1 refer to either the
+	 * codec of the 5th A2B subordinate node (node@5), or to a codec
+	 * connected to that node's I2C bus. For l0, start at (A0) and resolve
+	 * the remote-endpoint to (B0). Traverse the parents upwards; before
+	 * reaching the bus node (D), the reg value will be stored at (C).
+	 * This also works for (A0) -> (B0) -> (C) -> (D).
+	 *
+	 *   a2b-card {
+	 *     links = <&l0 &l1 ...>;
+	 *     adi,a2b-bus = <&a2b>;
+	 *
+	 *     ... {
+	 * (A0)  l0: port@0 { l0_ep: endpoint { remote-endpoint = <&c0_ep> }; };
+	 * (A1)  l1: port@1 { l1_ep: endpoint { remote-endpoint = <&c1_ep> }; };
+	 *       ...
+	 *     };
+	 *   };
+	 *
+	 *   i2c {
+	 * (D) a2b: a2b@68 {
+	 *       ...
+	 *       node@5 {
+	 * (C)     reg = <5>;
+	 *
+	 *         codec {
+	 * (B0)      c0_ep: endpoint { remote-endpoint = <&l0_ep>; };
+	 *         };
+	 *
+	 *         i2c {
+	 *           codec {
+	 * (B1)        c1_ep: endpoint { remote-endpoint = <&l1_ep>; };
+	 *           };
+	 *         };
+	 *       };
+	 *     };
+	 *   };
+	 *
+	 * If the A2B bus node is not a parent, the link is not on the bus and
+	 * will not be skipped.
+	 */
+
+	ep = of_get_child_by_name(lnk, "endpoint");
+	np = of_graph_get_remote_endpoint(ep);
+	of_node_put(ep);
+	while (np) {
+		if (np == priv->a2b_np) {
+			of_node_put(np);
+			if (reg >= priv->a2b_nodes)
+				skip = true;
+			break;
+		}
+
+		if (of_property_read_u32(np, "reg", &reg))
+			reg = U32_MAX;
+
+		np = of_get_next_parent(np);
+	}
+
+	return skip ? 1 : 0;
+}
+
+static struct graph2_custom_hooks a2b_graph_hooks = {
+	.custom_dpcm = a2b_graph_dpcm,
+	.hook_skip_link = a2b_graph_hook_skip_link,
+};
+
+static int a2b_graph_a2b_notify(struct notifier_block *nb, unsigned long event,
+				void *data)
+{
+	struct a2b_graph_priv *priv =
+		container_of(nb, struct a2b_graph_priv, a2b_nb);
+
+	switch (event) {
+	case A2B_BUS_EVENT_DISCOVERY_DONE:
+		if (priv->a2b_nodes)
+			break;
+
+		priv->a2b_nodes = a2b_bus_num_nodes(priv->a2b_bus);
+
+		complete(&priv->a2b_completion);
+
+		break;
+	default:
+		break;
+	}
+
+	return NOTIFY_OK;
+}
+
+static int a2b_graph_probe(struct platform_device *pdev)
+{
+	struct a2b_graph_priv *priv;
+	struct simple_util_priv *simple_priv;
+	struct snd_soc_card *card;
+	struct device *dev = &pdev->dev;
+	struct device_node *np;
+	int ret;
+
+	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
+	if (!priv)
+		return -ENOMEM;
+
+	platform_set_drvdata(pdev, priv);
+
+	priv->dev = dev;
+	priv->a2b_np = of_parse_phandle(dev->of_node, "adi,a2b-bus", 0);
+	if (!priv->a2b_np)
+		return -EINVAL;
+	init_completion(&priv->a2b_completion);
+
+	simple_priv = &priv->simple_priv;
+
+	/*
+	 * Use component chaining, since it is likely that the BE DAIs will be
+	 * connected together.
+	 */
+	card = simple_priv_to_card(simple_priv);
+	card->component_chaining = 1;
+
+	priv->a2b_bus = a2b_find_bus_by_of_node(priv->a2b_np);
+	if (!priv->a2b_bus) {
+		of_node_put(priv->a2b_np);
+		return -EPROBE_DEFER;
+	}
+
+	priv->a2b_nb.notifier_call = a2b_graph_a2b_notify;
+	ret = a2b_bus_register_notifier(priv->a2b_bus, &priv->a2b_nb);
+	if (ret) {
+		a2b_put_bus(priv->a2b_bus);
+		of_node_put(priv->a2b_np);
+		return ret;
+	}
+
+	if (!(a2b_bus_status(priv->a2b_bus) & BIT(A2B_BUS_STATUS_DISCOVERY)))
+		/*
+		 * Discovery has already finished on the A2B bus. Store
+		 * the number of nodes on the bus for usage in link
+		 * enumeration.
+		 */
+		priv->a2b_nodes = a2b_bus_num_nodes(priv->a2b_bus);
+	else {
+		/*
+		 * Discovery has not yet finished on the A2B bus. Wait
+		 * for up to 1 second and then try to probe. A timeout
+		 * is not fatal as sometimes the bus can take a long time
+		 * to discover if intermediate nodes require special firmware
+		 * to be loaded before the discovery process continues.
+		 */
+		if (!wait_for_completion_timeout(&priv->a2b_completion,
+						 msecs_to_jiffies(1000))) {
+			dev_dbg(dev, "timeout waiting for A2B discovery\n");
+			a2b_bus_unregister_notifier(priv->a2b_bus,
+						    &priv->a2b_nb);
+			a2b_put_bus(priv->a2b_bus);
+			of_node_put(priv->a2b_np);
+			return -EPROBE_DEFER;
+		}
+	}
+
+	/*
+	 * HACK: To allow probing even with fw_devlink=on, purge unwanted device
+	 * links. In reality fw_devlink should be able to resolve the cyclic
+	 * dependency, but due to the fact that the top-level A2B I2C device
+	 * finishes its binding before its child devices are even necessarily
+	 * created - think codecs in particular - fw_devlink=on purges one half
+	 * of the dependency graph before it can detect cycles. For more
+	 * information, see the comment at the top of
+	 * device_links_driver_bound().
+	 *
+	 * TODO: Reach out to Saravana for help with this when A2B is
+	 * upstreamed.
+	 */
+	for_each_child_of_node(dev->of_node, np)
+		fw_devlink_purge_absent_suppliers(&np->fwnode);
+
+	/* Done with the A2B bus, clean up */
+	a2b_bus_unregister_notifier(priv->a2b_bus, &priv->a2b_nb);
+	a2b_put_bus(priv->a2b_bus);
+
+	/*
+	 * If only a single (main) A2B node is available after discovery, then
+	 * the sound card will be inoperable due to an absence of any BE
+	 * DAI-links. Conclude that no suitable A2B devices are connected and
+	 * return -ENODEV rather than indefinitely deferring probe or
+	 * registering a useless device.
+	 */
+	if (priv->a2b_nodes == 1)
+		return -ENODEV;
+
+	/* Start the audio-graph-card2 probe */
+	ret = audio_graph2_parse_of(simple_priv, dev, &a2b_graph_hooks);
+	if (ret) {
+		of_node_put(priv->a2b_np);
+		return ret;
+	}
+
+	of_node_put(priv->a2b_np);
+	priv->a2b_np = NULL;
+
+	return 0;
+}
+
+static void a2b_graph_remove(struct platform_device *pdev)
+{
+	simple_util_remove(pdev);
+}
+
+static const struct of_device_id a2b_graph_of_match[] = {
+	{
+		.compatible = "adi,a2b-audio-graph-card2",
+	},
+	{},
+};
+MODULE_DEVICE_TABLE(of, a2b_graph_of_match);
+
+static struct platform_driver a2b_graph_card = {
+	.driver = {
+		.name = "a2b-audio-graph-card2",
+		.of_match_table = a2b_graph_of_match,
+		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
+	},
+	.probe	= a2b_graph_probe,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,13,0)
+	.remove = a2b_graph_remove,
+#else
+	.remove_new = a2b_graph_remove,
+#endif
+};
+module_platform_driver(a2b_graph_card);
+
+MODULE_LICENSE("GPL");
+MODULE_DESCRIPTION("ASoC A2B Audio Graph Card2");
+MODULE_AUTHOR("Alvin Šipraga <alsi@bang-olufsen.dk>");
