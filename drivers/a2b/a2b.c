@@ -312,9 +312,14 @@ unsigned int a2b_bus_num_nodes(struct a2b_bus *bus)
 }
 EXPORT_SYMBOL_GPL(a2b_bus_num_nodes);
 
-static int a2b_bus_del_node(struct device *dev, void *data)
+struct a2b_bus_del_node_data {
+	unsigned int stop_addr;
+	unsigned int nodes_deleted;
+};
+
+static int a2b_bus_del_node(struct device *dev, void *d)
 {
-	unsigned int *stop_addr = data;
+	struct a2b_bus_del_node_data *data = d;
 	struct a2b_node *node;
 
 	if (dev->type != &a2b_node_type)
@@ -323,22 +328,31 @@ static int a2b_bus_del_node(struct device *dev, void *data)
 	node = to_a2b_node(dev);
 
 	/* Break out early if this is the node to stop at */
-	if (stop_addr && node->addr <= *stop_addr)
+	if (node->addr < data->stop_addr)
 		return 1;
 
 	device_unregister(dev);
+	data->nodes_deleted++;
 
 	return 0;
 }
 
-static void a2b_bus_del_nodes_until(struct a2b_bus *bus, unsigned int stop_addr)
+static unsigned int a2b_bus_del_nodes_until(struct a2b_bus *bus,
+					    unsigned int stop_addr)
 {
-	device_for_each_child_reverse(&bus->dev, &stop_addr, a2b_bus_del_node);
+	struct a2b_bus_del_node_data data = {
+		.stop_addr = stop_addr,
+		.nodes_deleted = 0,
+	};
+
+	device_for_each_child_reverse(&bus->dev, &data, a2b_bus_del_node);
+
+	return data.nodes_deleted;
 }
 
 static void a2b_bus_del_nodes(struct a2b_bus *bus)
 {
-	device_for_each_child_reverse(&bus->dev, NULL, a2b_bus_del_node);
+	a2b_bus_del_nodes_until(bus, A2B_MAIN_ADDR);
 }
 
 static int a2b_bus_of_add_node(struct a2b_bus *bus, struct device_node *np,
@@ -462,7 +476,8 @@ static void a2b_bus_discovery_work(struct work_struct *work)
 		ret = last->ops->set_switching(
 			node, true, node == last ? A2B_SWMODE_0 : A2B_SWMODE_2);
 		if (ret) {
-			dev_err(&last->dev, "failed to disable switching: %d\n", ret);
+			dev_err(&last->dev, "failed to disable switching: %d\n",
+				ret);
 			goto out;
 		}
 	}
@@ -664,6 +679,7 @@ static void a2b_node_bus_drop_work(struct work_struct *work)
 	struct a2b_node *node =
 		container_of(work, struct a2b_node, bus_drop_work);
 	struct a2b_bus *bus = node->bus;
+	unsigned int nodes_deleted;
 	int ret;
 
 	ret = node->ops->set_switching(node, false, A2B_SWMODE_0);
@@ -672,10 +688,12 @@ static void a2b_node_bus_drop_work(struct work_struct *work)
 				    "failed to disable switching: %d\n", ret);
 
 	/* Delete the nodes that have left the bus */
-	a2b_bus_del_nodes_until(bus, node->addr);
+	nodes_deleted = a2b_bus_del_nodes_until(bus, node->addr + 1);
 
-	/* Schedule a rediscovery attempt in case the error is transient */
-	schedule_delayed_work(&bus->discovery_work, msecs_to_jiffies(1000));
+	/* Schedule a rediscovery attempt of any lost nodes */
+	if (nodes_deleted)
+		schedule_delayed_work(&bus->discovery_work,
+				      msecs_to_jiffies(1000));
 }
 
 void a2b_node_report_error(struct a2b_node *node, enum a2b_error error)
@@ -1033,7 +1051,7 @@ static void a2b_bus_remove(struct device *dev)
 		 * functionality cannot be guaranteed if an upstream node is not
 		 * registered with the core.
 		 */
-		a2b_bus_del_nodes_until(node->bus, node->addr);
+		a2b_bus_del_nodes_until(node->bus, node->addr + 1);
 	}
 
 	if (a2b_drv->remove)

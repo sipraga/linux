@@ -253,6 +253,9 @@ int ad24xx_node_set_switching(struct a2b_node *node, bool enable,
 	unsigned int val;
 	int ret;
 
+	dev_dbg(&node->dev, "%s switching, mode %d\n",
+		enable ? "enable" : "disable", mode);
+
 	val = FIELD_PREP(A2B_SWCTL_ENSW_MASK, !!enable) |
 	      FIELD_PREP(A2B_SWCTL_MODE_MASK, mode);
 
@@ -268,7 +271,7 @@ int ad24xx_node_discover(struct a2b_node *node, unsigned int respcycs)
 {
 	struct ad24xx_node *adn = node->priv;
 	int ret;
-	unsigned long timeout;
+	long timeout;
 
 	ret = regmap_write(adn->regmap, A2B_DISCVRY, respcycs);
 	if (ret)
