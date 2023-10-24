@@ -320,6 +320,14 @@ enum a2b_bus_status {
 	A2B_BUS_STATUS_END,
 };
 
+struct a2b_bus_event_data {
+	union {
+		struct {
+			unsigned int num_nodes;
+		} discovery_done;
+	};
+};
+
 /**
  * enum a2b_bus_event - events that are sent on the bus' blocking notifier chain
  *
@@ -397,15 +405,8 @@ void a2b_driver_unregister(struct a2b_driver *a2b_drv);
 #define module_a2b_driver(__a2b_driver) \
 	module_driver(__a2b_driver, a2b_driver_register, a2b_driver_unregister)
 
-static inline struct a2b_node *to_a2b_node(struct device *dev)
-{
-	return container_of(dev, struct a2b_node, dev);
-}
-
-static inline struct a2b_func *to_a2b_func(struct device *dev)
-{
-	return container_of(dev, struct a2b_func, dev);
-}
+#define to_a2b_node(dev) container_of_const(dev, struct a2b_node, dev)
+#define to_a2b_func(dev) container_of_const(dev, struct a2b_func, dev)
 
 extern const struct device_type a2b_node_type;
 extern const struct device_type a2b_func_type;

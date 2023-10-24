@@ -427,19 +427,21 @@ static struct device_node *a2b_bus_of_get_node_of_node(struct a2b_bus *bus,
 
 static void a2b_bus_event_discovery_done(struct a2b_bus *bus)
 {
+	struct a2b_bus_event_data data = { };
 	bool done;
 
 	mutex_lock(&bus->mutex);
 	done = test_and_clear_bit(A2B_BUS_STATUS_DISCOVERY, &bus->status);
+	data.discovery_done.num_nodes = __a2b_bus_num_nodes(bus);
 	mutex_unlock(&bus->mutex);
 
 	if (!done)
 		return;
 
 	dev_info(&bus->dev, "discovered %d subordinate nodes\n",
-		 __a2b_bus_num_subs(bus));
+		 data.discovery_done.num_nodes - 1);
 	blocking_notifier_call_chain(&bus->notifier,
-				     A2B_BUS_EVENT_DISCOVERY_DONE, NULL);
+				     A2B_BUS_EVENT_DISCOVERY_DONE, &data);
 }
 
 static void a2b_bus_discovery_work(struct work_struct *work)
@@ -966,33 +968,74 @@ const struct class a2b_bus_class = {
 	.dev_release = a2b_bus_class_dev_release,
 };
 
+static ssize_t discover_store(struct device *dev, struct device_attribute *attr,
+			      const char *buf, size_t count)
+{
+	struct a2b_bus *bus = to_a2b_bus(dev);
+
+	a2b_bus_discover(bus);
+
+	return count;
+}
+static DEVICE_ATTR_WO(discover);
+
+static struct attribute *a2b_bus_attrs[] = {
+	&dev_attr_discover.attr,
+	NULL
+};
+ATTRIBUTE_GROUPS(a2b_bus);
+
 const struct device_type a2b_bus_type = {
 	.name = "a2b-bus",
+	.groups = a2b_bus_groups,
 };
 
 /**
  * BUS DRIVER
  **/
 
+static int a2b_node_uevent(const struct device *dev,
+			   struct kobj_uevent_env *env)
+{
+	const struct a2b_node *node = to_a2b_node(dev);
+
+	if (add_uevent_var(env, "A2B_NODE_ADDR=%u", node->addr))
+		return -ENOMEM;
+
+	if (node->setup) {
+		if (add_uevent_var(env, "A2B_NODE_VENDOR=%02x", node->vendor))
+			return -ENOMEM;
+
+		if (add_uevent_var(env, "A2B_NODE_PRODUCT=%02x", node->product))
+			return -ENOMEM;
+
+		if (add_uevent_var(env, "A2B_NODE_VERSION=%02x", node->version))
+			return -ENOMEM;
+	}
+
+	return 0;
+}
+
 static void a2b_node_release(struct device *dev)
 {
-	struct a2b_node *a2b_node = to_a2b_node(dev);
+	struct a2b_node *node = to_a2b_node(dev);
 
 	of_node_clear_flag(dev->of_node, OF_POPULATED);
-	kfree(a2b_node);
+	kfree(node);
 }
 
 const struct device_type a2b_node_type = {
 	.name = "a2b-node",
+	.uevent = a2b_node_uevent,
 	.release = a2b_node_release,
 };
 
 static void a2b_func_release(struct device *dev)
 {
-	struct a2b_func *a2b_func = to_a2b_func(dev);
+	struct a2b_func *func = to_a2b_func(dev);
 
 	of_node_clear_flag(dev->of_node, OF_POPULATED);
-	kfree(a2b_func);
+	kfree(func);
 }
 
 const struct device_type a2b_func_type = {
