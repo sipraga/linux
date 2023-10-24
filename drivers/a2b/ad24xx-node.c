@@ -605,7 +605,21 @@ void ad24xx_node_teardown(struct a2b_node *node)
 	 * possibility that the switching is never toggled off, which is a
 	 * prerequisite for rediscovery.
 	 */
-	regmap_write(adn->regmap, A2B_SWCTL, 0);
+	regmap_write(adn->regmap, A2B_SWCTL, 0x00);
+
+	/*
+	 * Similarly, in case only an unbind is occurring, mask and clear all
+	 * pending interrupts to prevent spurious interrupts.
+	 */
+	regmap_write(adn->regmap, A2B_INTMSK0, 0x00);
+	regmap_write(adn->regmap, A2B_INTMSK1, 0x00);
+	regmap_write(adn->regmap, A2B_INTPND0, 0xFF);
+	regmap_write(adn->regmap, A2B_INTPND1, 0xFF);
+
+	if (is_a2b_main(node)) {
+		regmap_write(adn->regmap, A2B_INTMSK2, 0x00);
+		regmap_write(adn->regmap, A2B_INTPND2, 0xFF);
+	}
 }
 EXPORT_SYMBOL_GPL(ad24xx_node_teardown);
 

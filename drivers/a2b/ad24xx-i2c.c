@@ -21,6 +21,7 @@ struct ad24xx_i2c {
 	struct regmap *bus_regmap;
 	struct a2b_bus a2b_bus;
 	struct mutex mutex;
+	unsigned int irqs_enabled;
 	struct irq_domain *irqdomain;
 	int irq;
 	struct clk *sync_clk;
@@ -211,6 +212,7 @@ static irqreturn_t ad24xx_i2c_irq_handler(int irq, void *data)
 {
 	struct ad24xx_i2c *ad = data;
 	bool handled = false;
+	unsigned long hwirq;
 	unsigned int val;
 	unsigned int virq;
 	int ret;
@@ -232,14 +234,30 @@ static irqreturn_t ad24xx_i2c_irq_handler(int irq, void *data)
 		}
 
 		if (val & A2B_INTSRC_MSTINT_MASK)
-			virq = irq_find_mapping(ad->irqdomain, 0);
+			hwirq = 0;
 		else if (val & A2B_INTSRC_SLVINT_MASK)
-			virq = irq_find_mapping(ad->irqdomain,
-						(val & A2B_INTSRC_INODE_MASK) +
-							1);
+			hwirq = (val & A2B_INTSRC_INODE_MASK) + 1;
 		else
-			virq = 0;
+			break;
 
+		/*
+		 * Pending interrupts are only cleared when reading the
+		 * interrupt type. Normally this is done in the corresponding
+		 * node's interrupt handler, but in case the interrupt is
+		 * disabled, it has to be read here.
+		 */
+		if (!(BIT(hwirq) & ad->irqs_enabled)) {
+			ret = ad24xx_i2c_get_inttype(&ad->a2b_bus, &val);
+			if (ret)
+				dev_err_ratelimited(
+					ad->dev,
+					"failed to read interrupt type: %d\n",
+					ret);
+			handled = true;
+			continue;
+		}
+
+		virq = irq_find_mapping(ad->irqdomain, hwirq);
 		if (!virq)
 			break;
 
@@ -250,8 +268,26 @@ static irqreturn_t ad24xx_i2c_irq_handler(int irq, void *data)
 	return handled ? IRQ_HANDLED : IRQ_NONE;
 }
 
+static void ad24xx_i2c_irq_enable(struct irq_data *irq_data)
+{
+	struct ad24xx_i2c *ad = irq_data_get_irq_chip_data(irq_data);
+	irq_hw_number_t hwirq = irq_data->hwirq;
+
+	ad->irqs_enabled |= BIT(hwirq);
+}
+
+static void ad24xx_i2c_irq_disable(struct irq_data *irq_data)
+{
+	struct ad24xx_i2c *ad = irq_data_get_irq_chip_data(irq_data);
+	irq_hw_number_t hwirq = irq_data->hwirq;
+
+	ad->irqs_enabled &= ~BIT(hwirq);
+}
+
 static const struct irq_chip ad24xx_i2c_irq_chip = {
 	.name = "ad24xx-i2c",
+	.irq_enable = ad24xx_i2c_irq_enable,
+	.irq_disable = ad24xx_i2c_irq_disable,
 };
 
 static int ad24xx_i2c_irqdomain_map(struct irq_domain *irqdomain,
