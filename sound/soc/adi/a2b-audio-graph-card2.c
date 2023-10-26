@@ -133,6 +133,8 @@ static int a2b_graph_dpcm(struct simple_util_priv *simple_priv,
 	if (ret)
 		return ret;
 
+	dai_link->ignore_pmdown_time = 1;
+
 	return 0;
 }
 
