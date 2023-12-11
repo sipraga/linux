@@ -366,11 +366,29 @@ int ad24xx_node_is_last(struct a2b_node *node)
 }
 EXPORT_SYMBOL_GPL(ad24xx_node_is_last);
 
-int ad24xx_node_setup_i2sgcfg(struct ad24xx_node *adn)
+static int ad24xx_node_setup_pincfg(struct ad24xx_node *adn)
+{
+	struct device_node *np = adn->dev->of_node;
+	unsigned int val = 0;
+	unsigned int drvstr = 1; /* Chip default is high drive strength */
+	bool irqinv;
+	bool irqts;
+
+	of_property_read_u32(np, "adi,drive-strength", &drvstr);
+	irqinv = !!of_find_property(np, "adi,invert-interrupt", NULL);
+	irqts = !!of_find_property(np, "adi,tristate-interrupt", NULL);
+
+	val |= FIELD_PREP(A2B_PINCFG_DRVSTR_MASK, drvstr);
+	val |= FIELD_PREP(A2B_PINCFG_IRQINV_MASK, irqinv);
+	val |= FIELD_PREP(A2B_PINCFG_IRQTS_MASK, irqts);
+
+	return regmap_write(adn->regmap, A2B_PINCFG, val);
+}
+
+static int ad24xx_node_setup_i2sgcfg(struct ad24xx_node *adn)
 {
 	struct a2b_node *node = adn->node;
 	unsigned int val = 0;
-	int ret;
 
 	val |= FIELD_PREP(A2B_I2SGCFG_TDMMODE_MASK, node->tdm_mode);
 	val |= FIELD_PREP(A2B_I2SGCFG_RXONDTX1_MASK, node->rx_on_dtx1);
@@ -379,11 +397,7 @@ int ad24xx_node_setup_i2sgcfg(struct ad24xx_node *adn)
 	val |= FIELD_PREP(A2B_I2SGCFG_EARLY_MASK, node->early_sync);
 	val |= FIELD_PREP(A2B_I2SGCFG_INV_MASK, node->invert_sync);
 
-	ret = regmap_write(adn->regmap, A2B_I2SGCFG, val);
-	if (ret)
-		return ret;
-
-	return 0;
+	return regmap_write(adn->regmap, A2B_I2SGCFG, val);
 }
 
 static bool ad24xx_node_precious_reg(struct device *dev, unsigned int reg)
@@ -490,6 +504,11 @@ int ad24xx_node_setup(struct a2b_node *node)
 		if (ret)
 			return ret;
 	}
+
+	/* Pin configuration */
+	ret = ad24xx_node_setup_pincfg(adn);
+	if (ret)
+		return ret;
 
 	/* Enable interrupts */
 	ret = regmap_write(adn->regmap, A2B_INTMSK0, 0xFF);
