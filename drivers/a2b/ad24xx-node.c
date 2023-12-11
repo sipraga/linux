@@ -32,6 +32,7 @@ struct ad24xx_node {
 	struct a2b_func *func_gpio;
 	struct a2b_func *func_codec;
 	struct a2b_func *func_i2c;
+	struct a2b_func *func_clk;
 };
 
 static int of_a2b_parse_tdm_slot_size(struct device_node *np,
@@ -571,9 +572,21 @@ int ad24xx_node_setup(struct a2b_node *node)
 		goto err_i2c;
 	}
 
+	np = of_get_child_by_name(node->dev.of_node, "clock");
+	if (np)
+		adn->func_clk = a2b_node_of_add_func(node, np);
+	of_node_put(np);
+	if (IS_ERR(adn->func_clk)) {
+		ret = PTR_ERR(adn->func_clk);
+		goto err_clk;
+	}
+
 	return 0;
 
 	/* Unregister optional functions on error */
+err_clk:
+	if (adn->func_i2c)
+		device_unregister(&adn->func_i2c->dev);
 err_i2c:
 	if (adn->func_codec)
 		device_unregister(&adn->func_codec->dev);
@@ -589,6 +602,8 @@ void ad24xx_node_teardown(struct a2b_node *node)
 {
 	struct ad24xx_node *adn = node->priv;
 
+	if (adn->func_clk)
+		device_unregister(&adn->func_clk->dev);
 	if (adn->func_i2c)
 		device_unregister(&adn->func_i2c->dev);
 	if (adn->func_codec)
