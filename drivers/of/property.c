@@ -1207,6 +1207,7 @@ struct supplier_bindings {
 	u8 fwlink_flags;
 };
 
+DEFINE_SIMPLE_PROP(a2b_bus, "a2b-bus", NULL)
 DEFINE_SIMPLE_PROP(clocks, "clocks", "#clock-cells")
 DEFINE_SIMPLE_PROP(interconnects, "interconnects", "#interconnect-cells")
 DEFINE_SIMPLE_PROP(iommus, "iommus", "#iommu-cells")
@@ -1352,6 +1353,7 @@ static struct device_node *parse_remote_endpoint(struct device_node *np,
 }
 
 static const struct supplier_bindings of_supplier_bindings[] = {
+	{ .parse_prop = parse_a2b_bus, },
 	{ .parse_prop = parse_clocks, },
 	{ .parse_prop = parse_interconnects, },
 	{ .parse_prop = parse_iommus, .optional = true, },
