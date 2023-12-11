@@ -201,11 +201,19 @@ static int ad24xx_i2c_get_inttype(struct a2b_bus *a2b_bus,
 	return ret;
 }
 
+static struct clk *ad24xx_i2c_get_sync_clk(struct a2b_bus *a2b_bus)
+{
+	struct ad24xx_i2c *ad = to_ad24xx_i2c(a2b_bus);
+
+	return ad->sync_clk;
+}
+
 struct a2b_bus_ops ad24xx_i2c_a2b_bus_ops = {
 	.read = ad24xx_i2c_read,
 	.write = ad24xx_i2c_write,
 	.i2c_xfer = ad24xx_i2c_xfer,
 	.get_inttype = ad24xx_i2c_get_inttype,
+	.get_sync_clk = ad24xx_i2c_get_sync_clk,
 };
 
 static irqreturn_t ad24xx_i2c_irq_handler(int irq, void *data)

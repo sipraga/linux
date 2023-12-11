@@ -12,6 +12,7 @@
 #include <linux/of.h>
 #include <linux/notifier.h>
 
+struct clk;
 struct i2c_msg;
 
 /**
@@ -276,6 +277,7 @@ int a2b_node_read(struct a2b_node *node, unsigned int reg, unsigned int *val);
 int a2b_node_write(struct a2b_node *node, unsigned int reg, unsigned int val);
 int a2b_node_i2c_xfer(struct a2b_node *node, struct i2c_msg *msgs, int num);
 int a2b_node_get_inttype(struct a2b_node *node, unsigned int *val);
+struct clk *a2b_node_get_sync_clk(struct a2b_node *node);
 
 void a2b_node_report_error(struct a2b_node *node, enum a2b_error error);
 
@@ -374,6 +376,7 @@ int a2b_bus_unregister_notifier(struct a2b_bus *bus, struct notifier_block *nb);
  * @i2c_xfer: perform a raw I2C transfer from a subordinate node's I2C interface
  * @get_inttype: in the event of an interrupt on a node, the node must use this
  *               function to determine what type of interrupt it has received
+ * @get_sync_clk: return the &struct clk pointer associated with the SYNC clock
  */
 struct a2b_bus_ops {
 	int (*read)(struct a2b_bus *bus, const struct a2b_node *node,
@@ -383,6 +386,7 @@ struct a2b_bus_ops {
 	int (*i2c_xfer)(struct a2b_bus *bus, const struct a2b_node *node,
 			struct i2c_msg *msgs, int num);
 	int (*get_inttype)(struct a2b_bus *bus, unsigned int *val);
+	struct clk *(*get_sync_clk)(struct a2b_bus *bus);
 };
 
 /**

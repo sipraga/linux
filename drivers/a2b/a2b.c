@@ -676,6 +676,14 @@ int a2b_node_get_inttype(struct a2b_node *node, unsigned int *val)
 }
 EXPORT_SYMBOL_GPL(a2b_node_get_inttype);
 
+struct clk *a2b_node_get_sync_clk(struct a2b_node *node)
+{
+	struct a2b_bus *bus = node->bus;
+
+	return bus->ops->get_sync_clk(bus);
+}
+EXPORT_SYMBOL_GPL(a2b_node_get_sync_clk);
+
 static void a2b_node_bus_drop_work(struct work_struct *work)
 {
 	struct a2b_node *node =
