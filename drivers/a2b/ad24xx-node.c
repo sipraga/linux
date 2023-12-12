@@ -375,8 +375,8 @@ static int ad24xx_node_setup_pincfg(struct ad24xx_node *adn)
 	bool irqts;
 
 	of_property_read_u32(np, "adi,drive-strength", &drvstr);
-	irqinv = !!of_find_property(np, "adi,invert-interrupt", NULL);
-	irqts = !!of_find_property(np, "adi,tristate-interrupt", NULL);
+	irqinv = of_property_present(np, "adi,invert-interrupt");
+	irqts = of_property_present(np, "adi,tristate-interrupt");
 
 	val |= FIELD_PREP(A2B_PINCFG_DRVSTR_MASK, drvstr);
 	val |= FIELD_PREP(A2B_PINCFG_IRQINV_MASK, irqinv);
@@ -442,13 +442,13 @@ int ad24xx_node_setup(struct a2b_node *node)
 	if (ret)
 		return -EINVAL;
 
-	if (of_find_property(np, "adi,invert-sync", NULL))
+	if (of_property_present(np, "adi,invert-sync"))
 		node->invert_sync = 1;
-	if (of_find_property(np, "adi,early-sync", NULL))
+	if (of_property_present(np, "adi,early-sync"))
 		node->early_sync = 1;
-	if (of_find_property(np, "adi,alternating-sync", NULL))
+	if (of_property_present(np, "adi,alternating-sync"))
 		node->alternating_sync = 1;
-	if (of_find_property(np, "adi,rx-on-dtx1", NULL))
+	if (of_property_present(np, "adi,rx-on-dtx1"))
 		node->rx_on_dtx1 = 1;
 
 	node->priv = adn;
