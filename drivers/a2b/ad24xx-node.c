@@ -422,7 +422,7 @@ int ad24xx_node_setup(struct a2b_node *node)
 	struct device *dev = &node->dev;
 	struct device_node *np = dev->of_node;
 	struct ad24xx_node *adn;
-	unsigned long timeout;
+	long timeout;
 	int ret;
 
 	adn = devm_kzalloc(dev, sizeof(*adn), GFP_KERNEL);
