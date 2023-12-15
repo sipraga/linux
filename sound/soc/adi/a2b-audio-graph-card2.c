@@ -247,6 +247,7 @@ static int a2b_graph_probe(struct platform_device *pdev)
 	struct snd_soc_card *card;
 	struct device *dev = &pdev->dev;
 	struct device_node *np;
+	unsigned int min_a2b_nodes;
 	int ret;
 
 	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
@@ -332,12 +333,21 @@ static int a2b_graph_probe(struct platform_device *pdev)
 
 	/*
 	 * If only a single (main) A2B node is available after discovery, then
-	 * the sound card will be inoperable due to an absence of any BE
-	 * DAI-links. Conclude that no suitable A2B devices are connected and
-	 * return -ENODEV rather than indefinitely deferring probe or
-	 * registering a useless device.
+	 * the sound card may be inoperable due to an absence of any BE
+	 * DAI-links. Unless configured otherwise, conclude that no suitable A2B
+	 * devices are connected and return -ENODEV rather than indefinitely
+	 * deferring probe or registering a useless device.
+	 *
+	 * Note that there is always at least one node, so a value of 0 is
+	 * invalid.
 	 */
-	if (priv->a2b_nodes == 1)
+	if (of_property_read_u32(dev->of_node, "adi,minimum-a2b-nodes",
+				 &min_a2b_nodes))
+		min_a2b_nodes = 1;
+	else if (min_a2b_nodes == 0)
+		return -EINVAL;
+
+	if (priv->a2b_nodes < min_a2b_nodes)
 		return -ENODEV;
 
 	/* Start the audio-graph-card2 probe */
