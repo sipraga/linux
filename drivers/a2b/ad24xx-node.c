@@ -327,9 +327,9 @@ int ad24xx_node_new_structure(struct a2b_node *node,
 			 slot_config->size[A2B_DIR_DOWN]) |
 	      FIELD_PREP(A2B_SLOTFMT_DNFMT_MASK,
 			 slot_config->format[A2B_DIR_DOWN]) |
-	      FIELD_PREP(A2B_SLOTFMT_DNSIZE_MASK,
+	      FIELD_PREP(A2B_SLOTFMT_UPSIZE_MASK,
 			 slot_config->size[A2B_DIR_UP]) |
-	      FIELD_PREP(A2B_SLOTFMT_DNFMT_MASK,
+	      FIELD_PREP(A2B_SLOTFMT_UPFMT_MASK,
 			 slot_config->format[A2B_DIR_UP]);
 
 	ret = regmap_write(adn->regmap, A2B_SLOTFMT, val);
