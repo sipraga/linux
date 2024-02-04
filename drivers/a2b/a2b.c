@@ -114,6 +114,16 @@ static struct a2b_node *__a2b_bus_main_node(struct a2b_bus *bus)
 	return bus->nodes[A2B_MAIN_ADDR];
 }
 
+static struct a2b_node *__a2b_bus_next_node(struct a2b_node *node)
+{
+	struct a2b_bus *bus = node->bus;
+
+	if (node->addr == A2B_MAX_NODES - 1)
+		return NULL;
+
+	return bus->nodes[node->addr + 1];
+}
+
 static struct a2b_node *__a2b_bus_last_node(struct a2b_bus *bus)
 {
 	struct a2b_node *last = NULL;
@@ -162,24 +172,21 @@ static const unsigned int a2b_slot_bits[2][8] = {
 	},
 };
 
-static void __a2b_bus_calc_respcycs(struct a2b_bus *bus)
+static void __a2b_bus_calc_min_max_respcycs(struct a2b_bus *bus,
+					    unsigned int *min_respcycs_up,
+					    unsigned int *max_respcycs_dn)
 {
 	struct a2b_node *main = __a2b_bus_main_node(bus);
 	struct a2b_node *node;
-	unsigned int dnslot_activity[A2B_MAX_NODES] = { };
-	unsigned int upslot_activity[A2B_MAX_NODES] = { };
-	unsigned int respcycs_dn[A2B_MAX_NODES] = { };
-	unsigned int respcycs_up[A2B_MAX_NODES] = { };
-	enum a2b_slot_format slot_format_dn = bus->slot_config.format[A2B_DIR_DOWN];
-	enum a2b_slot_format slot_format_up = bus->slot_config.format[A2B_DIR_UP];
-	enum a2b_slot_size slot_size_dn = bus->slot_config.size[A2B_DIR_DOWN];
-	enum a2b_slot_size slot_size_up = bus->slot_config.size[A2B_DIR_UP];
+	struct a2b_slot_config *slot_config = &main->slot_req.slot_config;
+	enum a2b_slot_format slot_format_dn = slot_config->format[A2B_DIR_DOWN];
+	enum a2b_slot_format slot_format_up = slot_config->format[A2B_DIR_UP];
+	enum a2b_slot_size slot_size_dn = slot_config->size[A2B_DIR_DOWN];
+	enum a2b_slot_size slot_size_up = slot_config->size[A2B_DIR_UP];
 	unsigned int dnslot_size = a2b_slot_bits[slot_format_dn][slot_size_dn];
 	unsigned int upslot_size = a2b_slot_bits[slot_format_up][slot_size_up];
 	unsigned int respoffs =
 		a2b_respoffs[main->tdm_mode][main->tdm_slot_size];
-	unsigned int min_respcycs_up = 0xFF;
-	unsigned int max_respcycs_dn = 0;
 	int i;
 
 	/*
@@ -187,31 +194,38 @@ static void __a2b_bus_calc_respcycs(struct a2b_bus *bus)
 	 * Technical Reference [1] Appendix B "Response Cycle Formula".
 	 */
 
-	__a2b_bus_for_each_node(bus, node, i) {
-		unsigned int num_dnslots = node->num_dnslots;
-		unsigned int num_upslots = node->num_upslots;
-		int addr = node->addr;
+	*min_respcycs_up = 0xFF;
+	*max_respcycs_dn = 0;
 
-		dnslot_activity[addr] = num_dnslots * dnslot_size;
-		upslot_activity[addr] = num_upslots * upslot_size;
-		respcycs_dn[addr] =
-			((64 + dnslot_activity[addr]) / 4) + (4 * addr) + 2;
-		respcycs_up[addr] =
-			respoffs - (((64 + upslot_activity[addr]) / 4) + 1);
+	__a2b_bus_for_each_sub_node(bus, node, i) {
+		unsigned int num_dnslots = node->slot_req.a_dnslots;
+		unsigned int num_upslots = node->slot_req.a_upslots;
+		unsigned int dnslot_activity = num_dnslots * dnslot_size;
+		unsigned int upslot_activity = num_upslots * upslot_size;
+		unsigned int respcycs_dn =
+			DIV_ROUND_UP(64 + dnslot_activity, 4) +
+			(4 * node->addr) + 2;
+		unsigned int respcycs_up =
+			respoffs - DIV_ROUND_UP(64 + upslot_activity, 4) + 1;
 
-		if (respcycs_dn[addr] > max_respcycs_dn)
-			max_respcycs_dn = respcycs_dn[addr];
+		if (respcycs_dn > *max_respcycs_dn)
+			*max_respcycs_dn = respcycs_dn;
 
-		if (respcycs_up[addr] < min_respcycs_up)
-			min_respcycs_up = respcycs_up[addr];
+		if (respcycs_up < *min_respcycs_up)
+			*min_respcycs_up = respcycs_up;
 	}
-
-	bus->main_respcycs = (max_respcycs_dn + min_respcycs_up) / 2;
 }
 
 static unsigned int __a2b_bus_respcycs(struct a2b_bus *bus, int addr)
 {
-	unsigned int main_respcycs = bus->main_respcycs;
+	unsigned int main_respcycs;
+	unsigned int min_respcycs_up;
+	unsigned int max_respcycs_dn;
+
+	__a2b_bus_calc_min_max_respcycs(bus, &min_respcycs_up,
+					&max_respcycs_dn);
+
+	main_respcycs = (max_respcycs_dn + min_respcycs_up) / 2;
 
 	if (addr == A2B_MAIN_ADDR)
 		return main_respcycs;
@@ -224,14 +238,98 @@ static unsigned int __a2b_bus_respcycs(struct a2b_bus *bus, int addr)
 	return main_respcycs - (4 * (addr - 1));
 }
 
+static bool __a2b_bus_validate_structure(struct a2b_bus *bus)
+{
+	struct a2b_node *node;
+	unsigned int min_respcycs_up;
+	unsigned int max_respcycs_dn;
+	int i;
+
+	__a2b_bus_for_each_node(bus, node, i) {
+		struct a2b_node *next = __a2b_bus_next_node(node);
+		struct a2b_slot_req *req;
+		struct a2b_slot_req *nreq;
+
+		if (!next)
+			break;
+
+		req = &node->slot_req;
+		nreq = &next->slot_req;
+
+		if (req->b_dnslots != nreq->a_dnslots) {
+			dev_warn(&bus->dev,
+				 "structure validation failed: "
+				 "downstream slot mismatch: node %u(B) sends "
+				 "%u slots but node (A)%u receives %u slots\n",
+				 node->addr, req->b_dnslots, next->addr,
+				 nreq->a_dnslots);
+
+			return false;
+		}
+
+		if (req->b_upslots != nreq->a_upslots) {
+			dev_warn(&bus->dev,
+				 "structure validation failed: "
+				 "upstream slot mismatch: node %u(B) receives "
+				 "%u slots but node (A)%u sends %u slots\n",
+				 node->addr, req->b_upslots, next->addr,
+				 nreq->a_upslots);
+
+			return false;
+		}
+	}
+
+	__a2b_bus_calc_min_max_respcycs(bus, &min_respcycs_up,
+					&max_respcycs_dn);
+
+	if (max_respcycs_dn > min_respcycs_up) {
+			dev_warn(&bus->dev,
+				 "structure validation failed: "
+				 "insufficient bandwidth: "
+				 "max_respcycs_dn(%u) > min_respcycs_up(%u)\n",
+				 max_respcycs_dn, min_respcycs_up);
+
+			return false;
+	}
+
+	return true;
+}
+
+static bool __a2b_bus_new_structure_ready(struct a2b_bus *bus)
+{
+	struct a2b_node *node;
+	bool all = true;
+	bool none = true;
+	int i;
+
+	/*
+	 * This is a primitive synchronization mechanism for
+	 * a2b_node_request_slots(). The rule here is that a new structure is
+	 * ready to be applied if all nodes have requested slots, or if none of
+	 * them have requested slots.
+	 *
+	 * In the latter case, synchronous transmission of upstream and
+	 * downstream data will be disabled globally on the bus. This protects
+	 * against the scenario where the slot configuration written to the
+	 * register map of a node in the system is invalid when compared with
+	 * the configuration in other nodes.
+	 */
+	__a2b_bus_for_each_node(bus, node, i) {
+		none &= !node->slots_requested;
+		all &= node->slots_requested;
+	}
+
+	return all || none;
+}
+
 static int __a2b_bus_new_structure(struct a2b_bus *bus)
 {
 	struct a2b_node *main = __a2b_bus_main_node(bus);
 	struct a2b_node *node;
+	bool dn_enable = false;
+	bool up_enable = false;
 	int ret;
 	int i;
-
-	__a2b_bus_calc_respcycs(bus);
 
 	__a2b_bus_for_each_node(bus, node, i) {
 		unsigned int respcycs = __a2b_bus_respcycs(bus, node->addr);
@@ -239,9 +337,24 @@ static int __a2b_bus_new_structure(struct a2b_bus *bus)
 		ret = node->ops->set_respcycs(node, respcycs);
 		if (ret)
 			return ret;
+
+		if (is_a2b_main(node))
+			continue;
+
+		/*
+		 * Check for any downstream (resp. upstream) activity on the
+		 * A-side of each subordinate node. This informs whether or not
+		 * to enable synchronous transmission of data in each direction.
+		 */
+		if (node->slot_req.a_dnslots)
+			dn_enable = true;
+
+		if (node->slot_req.a_upslots)
+			up_enable = true;
 	}
 
-	ret = main->ops->new_structure(main, &bus->slot_config);
+	ret = main->ops->new_structure(main, &main->slot_req.slot_config,
+				       dn_enable, up_enable);
 	if (ret)
 		return ret;
 
@@ -478,7 +591,7 @@ static void a2b_bus_discovery_work(struct work_struct *work)
 		ret = last->ops->set_switching(
 			node, true, node == last ? A2B_SWMODE_0 : A2B_SWMODE_2);
 		if (ret) {
-			dev_err(&last->dev, "failed to disable switching: %d\n",
+			dev_err(&last->dev, "failed to enable switching: %d\n",
 				ret);
 			goto out;
 		}
@@ -763,58 +876,38 @@ void a2b_node_report_error(struct a2b_node *node, enum a2b_error error)
 }
 EXPORT_SYMBOL_GPL(a2b_node_report_error);
 
-int a2b_node_request_slots_pre(struct a2b_node *node,
-			       enum a2b_direction direction)
+int a2b_node_request_slots(struct a2b_node *node, struct a2b_slot_req *slot_req)
 {
 	struct a2b_bus *bus = node->bus;
 	int ret = 0;
 
 	mutex_lock(&bus->mutex);
 
-	if (bus->slotreqs[direction] & BIT(node->addr)) {
+	if (node->slots_requested) {
 		ret = -EBUSY;
 		goto out;
 	}
 
-	bus->slotreqs[direction] |= BIT(node->addr);
+	node->slot_req = *slot_req;
+	node->slots_requested = true;
 
-out:
-	mutex_unlock(&bus->mutex);
-
-	return ret;
-}
-EXPORT_SYMBOL_GPL(a2b_node_request_slots_pre);
-
-int a2b_node_request_slots(struct a2b_node *node, enum a2b_direction direction,
-			   unsigned int slots, enum a2b_slot_size slot_size,
-			   enum a2b_slot_format slot_format)
-{
-	struct a2b_bus *bus = node->bus;
-	int ret = 0;
-
-	mutex_lock(&bus->mutex);
-
-	if (!(bus->slotreqs[direction] & BIT(node->addr))) {
-		ret = -EINVAL;
+	if (!__a2b_bus_new_structure_ready(bus))
 		goto out;
+
+	if (!__a2b_bus_validate_structure(bus)) {
+		ret = -EINVAL;
+		goto err_reset;
 	}
 
-	if (direction == A2B_DIR_UP)
-		node->num_upslots = slots;
-	else
-		node->num_dnslots = slots;
+	ret = __a2b_bus_new_structure(bus);
+	if (ret)
+		goto err_reset;
 
-	/* The main node decides the slot sizes and formats */
-	if (is_a2b_main(node)) {
-		bus->slot_config.size[direction] = slot_size;
-		bus->slot_config.format[direction] = slot_format;
-	}
+	goto out;
 
-	bus->slotreqs[direction] &= ~BIT(node->addr);
-
-	/* Last requestor - apply new structure */
-	if (!bus->slotreqs[direction])
-		__a2b_bus_new_structure(bus);
+err_reset:
+	memset(&node->slot_req, 0, sizeof(node->slot_req));
+	node->slots_requested = false;
 
 out:
 	mutex_unlock(&bus->mutex);
@@ -822,6 +915,34 @@ out:
 	return ret;
 }
 EXPORT_SYMBOL_GPL(a2b_node_request_slots);
+
+int a2b_node_free_slots(struct a2b_node *node)
+{
+	struct a2b_bus *bus = node->bus;
+	int ret = 0;
+
+	mutex_lock(&bus->mutex);
+
+	if (!node->slots_requested)
+		goto out;
+
+	memset(&node->slot_req, 0, sizeof(node->slot_req));
+	node->slots_requested = false;
+
+	if (!__a2b_bus_new_structure_ready(bus))
+		goto out;
+
+	ret = __a2b_bus_new_structure(bus);
+	if (ret)
+		dev_err(&bus->dev,
+			"failed to apply new structure: %d\n", ret);
+
+out:
+	mutex_unlock(&bus->mutex);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(a2b_node_free_slots);
 
 int a2b_register_node(struct a2b_node *node)
 {

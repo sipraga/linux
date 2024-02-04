@@ -3,6 +3,11 @@
  * AD24xx codec driver
  *
  * Copyright (c) 2023 Alvin Šipraga <alsi@bang-olufsen.dk>
+ *
+ * Analog Devices Inc. documentation cited in some of the comments below:
+ *
+ * [1] AD2420(W)/6(W)/7(W)/8(W)/9(W) Automotive Audio Bus A2B Transceiver
+ *     Technical Reference, Revision 1.1, October 2019, Part Number 82-100138-01
  */
 
 #include <linux/a2b/a2b.h>
@@ -242,44 +247,185 @@ static int ad24xx_codec_set_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 	return 0;
 }
 
-static int ad24xx_codec_startup(struct snd_pcm_substream *substream,
-				struct snd_soc_dai *dai)
+static int ad24xx_codec_calc_a_dnslots(struct ad24xx_codec *adc)
 {
-	struct snd_soc_component *component = dai->component;
-	struct ad24xx_codec *adc = snd_soc_component_get_drvdata(component);
-	int direction = substream->stream;
-	int ret;
-
-	ret = a2b_node_request_slots_pre(
-		adc->node, direction == SNDRV_PCM_STREAM_PLAYBACK ?
-				   A2B_DIR_DOWN :
-				   A2B_DIR_UP);
-	if (ret)
-		return ret;
-
-	return 0;
-}
-
-static void ad24xx_codec_shutdown(struct snd_pcm_substream *substream,
-				 struct snd_soc_dai *dai)
-{
-	struct snd_soc_component *component = dai->component;
-	struct ad24xx_codec *adc = snd_soc_component_get_drvdata(component);
-	int direction = substream->stream == SNDRV_PCM_STREAM_PLAYBACK ?
-				A2B_DIR_DOWN :
-				A2B_DIR_UP;
+	struct a2b_node *node = adc->node;
+	unsigned int dnslots;
+	unsigned int dnmasken;
+	unsigned int ldnslots;
+	unsigned int bcdnslots;
+	unsigned int dnmaskrx;
+	__le32 dnmask;
+	unsigned int val;
 	int ret;
 
 	/*
-	 * The assumption here is that all codecs of the A2B bus are part of the
-	 * same PCM runtime. If not, then the RESPCYCS may get set wrong and the
-	 * bus may malfunction.
+	 * Calculate the number of downstream slots to be received by this
+	 * node's A-side transceiver. For main nodes this is trivially zero
+	 * because the A-side is inactive. Following [1] section 3-18
+	 * "Downstream Data Slots", for subordinate nodes the calculation
+	 * depends on whether the A2B_LDNSLOTS.DNMASKEN bit is set:
+	 *
+	 *   DNMASKEN=0 => A2B_BCDNSLOTS + A2B_DNSLOTS + A2B_LDNSLOTS
+	 *   DNMASKEN=1 => max(A2B_DNSLOTS, dnmaskrx)
+	 *
+	 * where dnmaskrx is the most significant bit of the A2B_DNMASK{0,3}
+	 * mask.
 	 */
-	ret = a2b_node_request_slots(adc->node, direction, 0,
-				     adc->slot_config.size[direction],
-				     adc->slot_config.format[direction]);
+
+	if (is_a2b_main(node))
+		return 0;
+
+	ret = regmap_read(adc->regmap, A2B_DNSLOTS, &val);
 	if (ret)
-		dev_err(adc->dev, "failed to free slots: %d\n", ret);
+		return ret;
+
+	dnslots = FIELD_GET(A2B_DNSLOTS_DNSLOTS_MASK, val);
+
+	ret = regmap_read(adc->regmap, A2B_LDNSLOTS, &val);
+	if (ret)
+		return ret;
+
+	ldnslots = FIELD_GET(A2B_LDNSLOTS_LDNSLOTS_MASK, val);
+	dnmasken = FIELD_GET(A2B_LDNSLOTS_DNMASKEN_MASK, val);
+
+	if (!dnmasken) {
+		ret = regmap_read(adc->regmap, A2B_BCDNSLOTS, &val);
+		if (ret)
+			return ret;
+
+		bcdnslots = FIELD_GET(A2B_BCDNSLOTS_BCDNSLOTS_MASK, val);
+
+		return bcdnslots + dnslots + ldnslots;
+	}
+
+	ret = regmap_bulk_read(adc->regmap, A2B_DNMASK0, &dnmask, 4);
+	if (ret)
+		return ret;
+
+	dnmaskrx = fls(le32_to_cpu(dnmask));
+
+	return max(dnslots, dnmaskrx);
+}
+
+static int ad24xx_codec_calc_b_dnslots(struct ad24xx_codec *adc)
+{
+	struct a2b_node *node = adc->node;
+	unsigned int dnslots;
+	unsigned int dnmasken;
+	unsigned int ldnslots;
+	unsigned int bcdnslots;
+	unsigned int val;
+	int ret;
+
+	/*
+	 * Calculate the number of downstream slots to be transmitted by this
+	 * node's B-side transceiver. Following [1] section 3-18 "Downstream
+	 * Data Slots", for main nodes the number is A2B_DNSLOTS. For
+	 * subordinate nodes the calculation depends on whether the
+	 * A2B_LDNSLOTS.DNMASKEN bit is set:
+	 *
+	 *   DNMASKEN=0 => A2B_BCDNSLOTS + A2B_DNSLOTS
+	 *   DNMASKEN=1 => A2B_DNSLOTS + A2B_LDNSLOTS
+	 */
+
+	ret = regmap_read(adc->regmap, A2B_DNSLOTS, &val);
+	if (ret)
+		return ret;
+
+	dnslots = FIELD_GET(A2B_DNSLOTS_DNSLOTS_MASK, val);
+
+	if (is_a2b_main(node))
+		return dnslots;
+
+	ret = regmap_read(adc->regmap, A2B_LDNSLOTS, &val);
+	if (ret)
+		return ret;
+
+	ldnslots = FIELD_GET(A2B_LDNSLOTS_LDNSLOTS_MASK, val);
+	dnmasken = FIELD_GET(A2B_LDNSLOTS_DNMASKEN_MASK, val);
+
+	if (dnmasken)
+		return dnslots + ldnslots;
+
+	ret = regmap_read(adc->regmap, A2B_BCDNSLOTS, &val);
+	if (ret)
+		return ret;
+
+	bcdnslots = FIELD_GET(A2B_BCDNSLOTS_BCDNSLOTS_MASK, val);
+
+	return bcdnslots + dnslots;
+}
+
+static unsigned int ad24xx_codec_calc_a_upslots(struct ad24xx_codec *adc)
+{
+	struct a2b_node *node = adc->node;
+	unsigned int upslots;
+	unsigned int lupslots;
+	unsigned int val;
+	int ret;
+
+	/*
+	 * Calculate the number of upstream slots to be transmitted by this
+	 * node's A-side transceiver. According to [1] section 3-20 "Upstream
+	 * Data Slots", this is A2B_UPSLOTS + A2B_LUPSLOTS for subordinate
+	 * nodes. For the main node it is trivially always zero, as its A-side
+	 * is inactive.
+	 */
+
+	if (is_a2b_main(node))
+		return 0;
+
+	ret = regmap_read(adc->regmap, A2B_UPSLOTS, &val);
+	if (ret)
+		return ret;
+
+	upslots = FIELD_GET(A2B_UPSLOTS_UPSLOTS_MASK, val);
+
+	ret = regmap_read(adc->regmap, A2B_LUPSLOTS, &val);
+	if (ret)
+		return ret;
+
+	lupslots = FIELD_GET(A2B_LUPSLOTS_LUPSLOTS_MASK, val);
+
+	return upslots + lupslots;
+}
+
+static unsigned int ad24xx_codec_calc_b_upslots(struct ad24xx_codec *adc)
+{
+	struct a2b_node *node = adc->node;
+	unsigned int upslots;
+	unsigned int upmaskrx;
+	unsigned int upmask;
+	unsigned int val;
+	u8 buf[4];
+	int ret;
+
+	/*
+	 * Calculate the number of upstream slots to be received by this node's
+	 * B-side transceiver. This is, cf. [1] section 3-20, max(A2B_UPSLOTS,
+	 * upmaskrx), where upmaskrx is the most significant bit of the
+	 * A2B_UPMASK{0,3} mask. For main nodes it is simply the value of
+	 * A2B_UPSLOTS, as they have no upstream data RX mask to configure.
+	 */
+
+	ret = regmap_read(adc->regmap, A2B_UPSLOTS, &val);
+	if (ret)
+		return ret;
+
+	upslots = FIELD_GET(A2B_UPSLOTS_UPSLOTS_MASK, val);
+
+	if (is_a2b_main(node))
+		return upslots;
+
+	ret = regmap_bulk_read(adc->regmap, A2B_UPMASK0, buf, 4);
+	if (ret)
+		return ret;
+
+	upmask = buf[0] | (buf[1] << 8) | (buf[2] << 16) | (buf[3] << 24);
+	upmaskrx = fls(upmask);
+
+	return max(upslots, upmaskrx);
 }
 
 static int ad24xx_codec_hw_params(struct snd_pcm_substream *substream,
@@ -288,11 +434,14 @@ static int ad24xx_codec_hw_params(struct snd_pcm_substream *substream,
 {
 	struct snd_soc_component *component = dai->component;
 	struct ad24xx_codec *adc = snd_soc_component_get_drvdata(component);
-	enum a2b_direction direction =
-		substream->stream == SNDRV_PCM_STREAM_PLAYBACK ? A2B_DIR_DOWN :
-								 A2B_DIR_UP;
 	unsigned int rate = params_rate(params);
-	unsigned int num_slots;
+	struct a2b_slot_req slot_req = {
+		.a_dnslots = ad24xx_codec_calc_a_dnslots(adc),
+		.a_upslots = ad24xx_codec_calc_a_upslots(adc),
+		.b_dnslots = ad24xx_codec_calc_b_dnslots(adc),
+		.b_upslots = ad24xx_codec_calc_b_upslots(adc),
+		.slot_config = adc->slot_config, /* ignored for subordinates */
+	};
 	int ret;
 
 	/* Configure I2S/TDM rate */
@@ -333,16 +482,9 @@ static int ad24xx_codec_hw_params(struct snd_pcm_substream *substream,
 			return ret;
 	}
 
-	ret = regmap_read(adc->regmap,
-			  direction == A2B_DIR_DOWN ? A2B_DNSLOTS : A2B_UPSLOTS,
-			  &num_slots);
-	if (ret)
-		return ret;
 
 	/* Finally, request slots */
-	ret = a2b_node_request_slots(adc->node, direction, num_slots,
-				     adc->slot_config.size[direction],
-				     adc->slot_config.format[direction]);
+	ret = a2b_node_request_slots(adc->node, &slot_req);
 	if (ret)
 		return ret;
 
@@ -354,14 +496,9 @@ static int ad24xx_codec_hw_free(struct snd_pcm_substream *substream,
 {
 	struct snd_soc_component *component = dai->component;
 	struct ad24xx_codec *adc = snd_soc_component_get_drvdata(component);
-	int direction = substream->stream;
 	int ret;
 
-	/* Prepare to (un)request slots */
-	ret = a2b_node_request_slots_pre(
-		adc->node, direction == SNDRV_PCM_STREAM_PLAYBACK ?
-				   A2B_DIR_DOWN :
-				   A2B_DIR_UP);
+	ret = a2b_node_free_slots(adc->node);
 	if (ret)
 		return ret;
 
@@ -370,8 +507,6 @@ static int ad24xx_codec_hw_free(struct snd_pcm_substream *substream,
 
 static const struct snd_soc_dai_ops ad24xx_codec_dai_ops = {
 	.set_fmt = ad24xx_codec_set_fmt,
-	.startup = ad24xx_codec_startup,
-	.shutdown = ad24xx_codec_shutdown,
 	.hw_params = ad24xx_codec_hw_params,
 	.hw_free = ad24xx_codec_hw_free,
 };

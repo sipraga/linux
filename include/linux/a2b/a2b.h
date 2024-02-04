@@ -99,6 +99,14 @@ struct a2b_slot_config {
 	enum a2b_slot_format format[2];
 };
 
+struct a2b_slot_req {
+	unsigned int a_dnslots;
+	unsigned int a_upslots;
+	unsigned int b_dnslots;
+	unsigned int b_upslots;
+	struct a2b_slot_config slot_config;
+};
+
 /**
  * A2B NODE
  **/
@@ -160,7 +168,8 @@ struct a2b_node_ops {
 	int (*set_switching)(struct a2b_node *node, bool enable, enum a2b_swmode mode);
 	int (*discover)(struct a2b_node *node, unsigned int respcycs);
 	int (*new_structure)(struct a2b_node *node,
-			     const struct a2b_slot_config *slot_config);
+			     const struct a2b_slot_config *slot_config,
+			     bool dn_enable, bool up_enable);
 	int (*is_last)(struct a2b_node *node);
 	int (*setup)(struct a2b_node *node);
 	void (*teardown)(struct a2b_node *node);
@@ -188,8 +197,8 @@ struct a2b_node {
 	struct a2b_bus *bus;
 	struct work_struct bus_drop_work;
 	unsigned int addr;
-	unsigned int num_dnslots;
-	unsigned int num_upslots;
+	struct a2b_slot_req slot_req;
+	bool slots_requested;
 };
 
 static inline bool is_a2b_main(const struct a2b_node *node)
@@ -281,11 +290,9 @@ struct clk *a2b_node_get_sync_clk(struct a2b_node *node);
 
 void a2b_node_report_error(struct a2b_node *node, enum a2b_error error);
 
-int a2b_node_request_slots_pre(struct a2b_node *node,
-			       enum a2b_direction direction);
-int a2b_node_request_slots(struct a2b_node *node, enum a2b_direction direction,
-			   unsigned int slots, enum a2b_slot_size slot_size,
-			   enum a2b_slot_format slot_format);
+int a2b_node_request_slots(struct a2b_node *node,
+			   struct a2b_slot_req *slot_req);
+int a2b_node_free_slots(struct a2b_node *node);
 
 int a2b_register_node(struct a2b_node *node);
 void a2b_unregister_node(struct a2b_node *node);
@@ -349,8 +356,6 @@ struct a2b_bus {
 	struct device dev;
 	int id;
 	struct mutex mutex;
-	unsigned int slotreqs[2];
-	struct a2b_slot_config slot_config;
 	struct a2b_node *nodes[A2B_MAX_NODES];
 	unsigned int main_respcycs;
 	unsigned long status;

@@ -311,7 +311,8 @@ int ad24xx_node_discover(struct a2b_node *node, unsigned int respcycs)
 EXPORT_SYMBOL_GPL(ad24xx_node_discover);
 
 int ad24xx_node_new_structure(struct a2b_node *node,
-			      const struct a2b_slot_config *slot_config)
+			      const struct a2b_slot_config *slot_config,
+			      bool dn_enable, bool up_enable)
 {
 	struct ad24xx_node *adn = node->priv;
 	unsigned int val;
@@ -336,8 +337,8 @@ int ad24xx_node_new_structure(struct a2b_node *node,
 	if (ret)
 		return ret;
 
-	val = FIELD_PREP(A2B_DATCTL_DNS_MASK, !!node->num_dnslots) |
-	      FIELD_PREP(A2B_DATCTL_UPS_MASK, !!node->num_upslots);
+	val = FIELD_PREP(A2B_DATCTL_DNS_MASK, dn_enable) |
+	      FIELD_PREP(A2B_DATCTL_UPS_MASK, up_enable);
 
 	ret = regmap_write(adn->regmap, A2B_DATCTL, val);
 	if (ret)
