@@ -348,6 +348,14 @@ int ad24xx_node_new_structure(struct a2b_node *node,
 	if (ret)
 		return ret;
 
+	/*
+	 * A new structure is applied within 5 superframe cycles unless
+	 * communication errors create delays, cf. [1] section 7-24 "Control
+	 * Register". Nominally this is about 100 us, so add a little extra to
+	 * account for any potential errors.
+	 */
+	usleep_range(200, 400);
+
 	return 0;
 }
 EXPORT_SYMBOL_GPL(ad24xx_node_new_structure);
