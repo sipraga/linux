@@ -19,25 +19,49 @@ struct i2c_msg;
  * MISC
  **/
 
+/**
+ * enum a2b_chip_caps - A2B chip capabilities
+ *
+ * @A2B_CHIP_CAP_MAIN: the chip can function in main mode
+ * @A2B_CHIP_CAP_A_SIDE: the chip has an A-side transceiver
+ * @A2B_CHIP_CAP_B_SIDE: the chip has a B-side transceiver
+ * @A2B_CHIP_CAP_I2S: the chip has an I2S/TDM interface
+ * @A2B_CHIP_CAP_PDM: the chip has a PDM interface
+ * @A2B_CHIP_CAP_REDUCED_RATE: the chip supports the reduced rate feature
+ * @A2B_CHIP_CAP_CLKOUT: the chip supports CLKOUT1/CLKOUT2
+ * @A2B_CHIP_CAP_BUS_MONITOR: the chip supports the bus monitor feature
+ * @A2B_CHIP_CAP_SUSTAIN: the chip supports the sustain feature
+ * @A2B_CHIP_CAP_DATA_RX_MASK: the chip supports specifying slot RX masks
+ * @A2B_CHIP_CAP_GPIO_DISTANCE: the chip supports the GPIO over distance feature
+ * @A2B_CHIP_CAP_MAILBOX: the chip supports the mailbox feature
+ */
 enum a2b_chip_caps {
-	A2B_CHIP_CAP_MAIN = (1 << 0),
+	A2B_CHIP_CAP_MAIN = BIT(0),
+	A2B_CHIP_CAP_A_SIDE = BIT(1),
+	A2B_CHIP_CAP_B_SIDE = BIT(2),
+	A2B_CHIP_CAP_I2S = BIT(3),
+	A2B_CHIP_CAP_PDM = BIT(4),
+	A2B_CHIP_CAP_REDUCED_RATE = BIT(5),
+	A2B_CHIP_CAP_CLKOUT = BIT(6),
+	A2B_CHIP_CAP_BUS_MONITOR = BIT(7),
+	A2B_CHIP_CAP_SUSTAIN = BIT(8),
+	A2B_CHIP_CAP_DATA_RX_MASK = BIT(9),
+	A2B_CHIP_CAP_GPIO_DISTANCE = BIT(10),
+	A2B_CHIP_CAP_MAILBOX = BIT(11),
 };
 
+/**
+ * struct a2b_chip_info - chip information
+ *
+ * @caps: chip capabilities
+ * @max_subs: maximum number of discoverable A2B nodes if this node is main
+ * @max_gpios: maximum number of available GPIOs
+ */
 struct a2b_chip_info {
-	int caps;
+	unsigned int caps;
 	unsigned int max_subs;
+	unsigned int max_gpios;
 };
-
-enum a2b_chips {
-	A2B_AD2403,
-	A2B_AD2410,
-	A2B_AD2425,
-	A2B_AD2428,
-	A2B_AD2429,
-	A2B_NUM_CHIPS,
-};
-
-extern const struct a2b_chip_info a2b_chip_info[A2B_NUM_CHIPS];
 
 enum a2b_superframe_freq {
 	A2B_SFF_48000,
@@ -204,6 +228,11 @@ struct a2b_node {
 static inline bool is_a2b_main(const struct a2b_node *node)
 {
 	return node->addr == A2B_MAIN_ADDR;
+}
+
+static inline bool is_a2b_sub(const struct a2b_node *node)
+{
+	return !is_a2b_main(node);
 }
 
 enum a2b_inttype {

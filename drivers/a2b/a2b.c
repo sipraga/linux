@@ -25,30 +25,6 @@ static DEFINE_IDA(a2b_ida);
  * MISC
  **/
 
-const struct a2b_chip_info a2b_chip_info[A2B_NUM_CHIPS] = {
-	[A2B_AD2403] = {
-		.caps = A2B_CHIP_CAP_MAIN,
-		.max_subs = 8,
-	},
-	[A2B_AD2410] = {
-		.caps = A2B_CHIP_CAP_MAIN,
-		.max_subs = 8,
-	},
-	[A2B_AD2425] = {
-		.caps = A2B_CHIP_CAP_MAIN,
-		.max_subs = 10,
-	},
-	[A2B_AD2428] = {
-		.caps = A2B_CHIP_CAP_MAIN,
-		.max_subs = 10,
-	},
-	[A2B_AD2429] = {
-		.caps = A2B_CHIP_CAP_MAIN,
-		.max_subs = 2,
-	},
-};
-EXPORT_SYMBOL_GPL(a2b_chip_info);
-
 static const char *a2b_error_to_string(enum a2b_error error)
 {
 	switch (error) {
@@ -577,6 +553,9 @@ static void a2b_bus_discovery_work(struct work_struct *work)
 	new_addr = last->addr + 1;
 
 	if (new_addr > main->chip_info->max_subs)
+		goto out;
+
+	if (!(last->chip_info->caps & A2B_CHIP_CAP_B_SIDE))
 		goto out;
 
 	set_bit(A2B_BUS_STATUS_DISCOVERY, &bus->status);

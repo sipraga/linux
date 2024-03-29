@@ -550,7 +550,7 @@ static void beo_shape_node_remove(struct device *dev)
 static const struct of_device_id beo_shape_node_of_match_table[] = {
 	{
 		.compatible = "beo,shape-node",
-		.data = &a2b_chip_info[A2B_AD2425],
+		.data = &ad24xx_chip_info[A2B_AD2425],
 	},
 	{ /* sentinel */ }
 };

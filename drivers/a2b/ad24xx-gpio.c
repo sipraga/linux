@@ -204,6 +204,7 @@ static const struct regmap_config ad24xx_gpio_regmap_config = {
 static int ad24xx_gpio_probe(struct device *dev)
 {
 	struct a2b_func *func = to_a2b_func(dev);
+	struct a2b_node *node = func->node;
 	struct fwnode_handle *fwnode = of_node_to_fwnode(dev->of_node);
 	struct gpio_chip *gpio_chip;
 	struct gpio_irq_chip *irq_chip;
@@ -223,7 +224,7 @@ static int ad24xx_gpio_probe(struct device *dev)
 
 	adg->dev = dev;
 	adg->func = func;
-	adg->node = func->node;
+	adg->node = node;
 	mutex_init(&adg->mutex);
 
 	np = of_irq_find_parent(dev->of_node);
@@ -246,7 +247,7 @@ static int ad24xx_gpio_probe(struct device *dev)
 	gpio_chip->get = ad24xx_gpio_get;
 	gpio_chip->set = ad24xx_gpio_set;
 	gpio_chip->base = -1;
-	gpio_chip->ngpio = AD24XX_MAX_GPIOS;
+	gpio_chip->ngpio = node->chip_info->max_gpios;
 	gpio_chip->can_sleep = true;
 
 	irq_chip = &gpio_chip->irq;
@@ -270,21 +271,18 @@ static int ad24xx_gpio_probe(struct device *dev)
 }
 
 static const struct of_device_id ad24xx_gpio_of_match_table[] = {
-	{
-		.compatible = "adi,ad2403-gpio",
-	},
-	{
-		.compatible = "adi,ad2410-gpio",
-	},
-	{
-		.compatible = "adi,ad2425-gpio",
-	},
-	{
-		.compatible = "adi,ad2428-gpio",
-	},
-	{
-		.compatible = "adi,ad2429-gpio",
-	},
+	{ .compatible = "adi,ad2401-gpio" },
+	{ .compatible = "adi,ad2402-gpio" },
+	{ .compatible = "adi,ad2403-gpio" },
+	{ .compatible = "adi,ad2410-gpio" },
+	{ .compatible = "adi,ad2420-gpio" },
+	{ .compatible = "adi,ad2421-gpio" },
+	{ .compatible = "adi,ad2422-gpio" },
+	{ .compatible = "adi,ad2425-gpio" },
+	{ .compatible = "adi,ad2426-gpio" },
+	{ .compatible = "adi,ad2427-gpio" },
+	{ .compatible = "adi,ad2428-gpio" },
+	{ .compatible = "adi,ad2429-gpio" },
 	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, ad24xx_gpio_of_match_table);

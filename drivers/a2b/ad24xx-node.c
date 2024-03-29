@@ -20,6 +20,7 @@
 #include <linux/module.h>
 #include <linux/of_irq.h>
 #include <linux/regmap.h>
+#include "ad24xx-node.h"
 
 struct ad24xx_node {
 	struct device *dev;
@@ -34,6 +35,105 @@ struct ad24xx_node {
 	struct a2b_func *func_i2c;
 	struct a2b_func *func_clk;
 };
+
+#define A2B_CHIP_CAPS_AD242X                                      \
+	(A2B_CHIP_CAP_REDUCED_RATE | A2B_CHIP_CAP_CLKOUT |        \
+	 A2B_CHIP_CAP_BUS_MONITOR | A2B_CHIP_CAP_SUSTAIN |        \
+	 A2B_CHIP_CAP_DATA_RX_MASK | A2B_CHIP_CAP_GPIO_DISTANCE | \
+	 A2B_CHIP_CAP_MAILBOX)
+
+const struct a2b_chip_info ad24xx_chip_info[] = {
+	[A2B_AD2401] = {
+		.caps = A2B_CHIP_CAP_A_SIDE |
+			A2B_CHIP_CAP_PDM,
+		.max_gpios = 7,
+	},
+	[A2B_AD2402] = {
+		.caps = A2B_CHIP_CAP_A_SIDE |
+			A2B_CHIP_CAP_B_SIDE |
+			A2B_CHIP_CAP_PDM,
+		.max_gpios = 7,
+	},
+	[A2B_AD2403] = {
+		.caps = A2B_CHIP_CAP_MAIN |
+			A2B_CHIP_CAP_A_SIDE |
+			A2B_CHIP_CAP_B_SIDE |
+			A2B_CHIP_CAP_I2S,
+		.max_subs = 8,
+		.max_gpios = 7,
+	},
+	[A2B_AD2410] = {
+		.caps = A2B_CHIP_CAP_MAIN |
+			A2B_CHIP_CAP_A_SIDE |
+			A2B_CHIP_CAP_B_SIDE |
+			A2B_CHIP_CAP_I2S |
+			A2B_CHIP_CAP_PDM,
+		.max_subs = 8,
+		.max_gpios = 7,
+	},
+	[A2B_AD2420] = {
+		.caps = A2B_CHIP_CAP_A_SIDE |
+			A2B_CHIP_CAP_PDM |
+			A2B_CHIP_CAPS_AD242X,
+		.max_gpios = 8,
+	},
+	[A2B_AD2421] = {
+		.caps = A2B_CHIP_CAP_A_SIDE |
+			A2B_CHIP_CAP_PDM |
+			A2B_CHIP_CAPS_AD242X,
+		.max_gpios = 8,
+	},
+	[A2B_AD2422] = {
+		.caps = A2B_CHIP_CAP_A_SIDE |
+			A2B_CHIP_CAP_B_SIDE |
+			A2B_CHIP_CAP_PDM |
+			A2B_CHIP_CAPS_AD242X,
+		.max_gpios = 8,
+	},
+	[A2B_AD2425] = {
+		.caps = A2B_CHIP_CAP_MAIN |
+			A2B_CHIP_CAP_A_SIDE |
+			A2B_CHIP_CAP_B_SIDE |
+			A2B_CHIP_CAP_I2S |
+			A2B_CHIP_CAP_PDM |
+			A2B_CHIP_CAPS_AD242X,
+		.max_subs = 10,
+		.max_gpios = 8,
+	},
+	[A2B_AD2426] = {
+		.caps = A2B_CHIP_CAP_A_SIDE |
+			A2B_CHIP_CAP_PDM |
+			A2B_CHIP_CAPS_AD242X,
+		.max_gpios = 8,
+	},
+	[A2B_AD2427] = {
+		.caps = A2B_CHIP_CAP_A_SIDE |
+			A2B_CHIP_CAP_B_SIDE |
+			A2B_CHIP_CAP_PDM |
+			A2B_CHIP_CAPS_AD242X,
+		.max_gpios = 8,
+	},
+	[A2B_AD2428] = {
+		.caps = A2B_CHIP_CAP_MAIN |
+			A2B_CHIP_CAP_A_SIDE |
+			A2B_CHIP_CAP_B_SIDE |
+			A2B_CHIP_CAP_I2S |
+			A2B_CHIP_CAP_PDM |
+			A2B_CHIP_CAPS_AD242X,
+		.max_subs = 10,
+		.max_gpios = 8,
+	},
+	[A2B_AD2429] = {
+		.caps = A2B_CHIP_CAP_MAIN |
+			A2B_CHIP_CAP_B_SIDE |
+			A2B_CHIP_CAP_I2S |
+			A2B_CHIP_CAP_PDM |
+			A2B_CHIP_CAPS_AD242X,
+		.max_subs = 2,
+		.max_gpios = 8,
+	},
+};
+EXPORT_SYMBOL_GPL(ad24xx_chip_info);
 
 static int of_a2b_parse_tdm_slot_size(struct device_node *np,
 				      enum a2b_tdm_slot_size *tdm_slot_size)
@@ -707,26 +807,18 @@ static void ad24xx_node_remove(struct device *dev)
 }
 
 static const struct of_device_id ad24xx_node_of_match_table[] = {
-	{
-		.compatible = "adi,ad2403",
-		.data = &a2b_chip_info[A2B_AD2403],
-	},
-	{
-		.compatible = "adi,ad2410",
-		.data = &a2b_chip_info[A2B_AD2410],
-	},
-	{
-		.compatible = "adi,ad2425",
-		.data = &a2b_chip_info[A2B_AD2425],
-	},
-	{
-		.compatible = "adi,ad2428",
-		.data = &a2b_chip_info[A2B_AD2428],
-	},
-	{
-		.compatible = "adi,ad2429",
-		.data = &a2b_chip_info[A2B_AD2429],
-	},
+	{ .compatible = "adi,ad2401", .data = &ad24xx_chip_info[A2B_AD2401] },
+	{ .compatible = "adi,ad2402", .data = &ad24xx_chip_info[A2B_AD2402] },
+	{ .compatible = "adi,ad2403", .data = &ad24xx_chip_info[A2B_AD2403] },
+	{ .compatible = "adi,ad2410", .data = &ad24xx_chip_info[A2B_AD2410] },
+	{ .compatible = "adi,ad2420", .data = &ad24xx_chip_info[A2B_AD2420] },
+	{ .compatible = "adi,ad2421", .data = &ad24xx_chip_info[A2B_AD2421] },
+	{ .compatible = "adi,ad2422", .data = &ad24xx_chip_info[A2B_AD2422] },
+	{ .compatible = "adi,ad2425", .data = &ad24xx_chip_info[A2B_AD2425] },
+	{ .compatible = "adi,ad2426", .data = &ad24xx_chip_info[A2B_AD2426] },
+	{ .compatible = "adi,ad2427", .data = &ad24xx_chip_info[A2B_AD2427] },
+	{ .compatible = "adi,ad2428", .data = &ad24xx_chip_info[A2B_AD2428] },
+	{ .compatible = "adi,ad2429", .data = &ad24xx_chip_info[A2B_AD2429] },
 	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, ad24xx_node_of_match_table);

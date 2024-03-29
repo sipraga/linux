@@ -91,21 +91,17 @@ static int ad24xx_i2c_master_probe(struct device *dev)
 }
 
 static const struct of_device_id ad24xx_i2c_master_of_match_table[] = {
-	{
-		.compatible = "adi,ad2403-i2c-master",
-	},
-	{
-		.compatible = "adi,ad2410-i2c-master",
-	},
-	{
-		.compatible = "adi,ad2425-i2c-master",
-	},
-	{
-		.compatible = "adi,ad2428-i2c-master",
-	},
-	{
-		.compatible = "adi,ad2429-i2c-master",
-	},
+	{ .compatible = "adi,ad2401-i2c-master" },
+	{ .compatible = "adi,ad2402-i2c-master" },
+	{ .compatible = "adi,ad2403-i2c-master" },
+	{ .compatible = "adi,ad2410-i2c-master" },
+	{ .compatible = "adi,ad2420-i2c-master" },
+	{ .compatible = "adi,ad2421-i2c-master" },
+	{ .compatible = "adi,ad2422-i2c-master" },
+	{ .compatible = "adi,ad2425-i2c-master" },
+	{ .compatible = "adi,ad2426-i2c-master" },
+	{ .compatible = "adi,ad2427-i2c-master" },
+	{ .compatible = "adi,ad2428-i2c-master" },
 	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, ad24xx_i2c_master_of_match_table);

@@ -492,21 +492,11 @@ static int ad24xx_i2c_probe(struct i2c_client *client)
 }
 
 static const struct of_device_id ad24xx_i2c_of_match_table[] = {
-	{
-		.compatible = "adi,ad2403",
-	},
-	{
-		.compatible = "adi,ad2410",
-	},
-	{
-		.compatible = "adi,ad2425",
-	},
-	{
-		.compatible = "adi,ad2428",
-	},
-	{
-		.compatible = "adi,ad2429",
-	},
+	{ .compatible = "adi,ad2403" },
+	{ .compatible = "adi,ad2410" },
+	{ .compatible = "adi,ad2425" },
+	{ .compatible = "adi,ad2428" },
+	{ .compatible = "adi,ad2429" },
 	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, ad24xx_i2c_of_match_table);

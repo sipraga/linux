@@ -227,12 +227,22 @@ static struct clk_hw *ad24xx_clk_of_get(struct of_phandle_args *clkspec, void *d
 static int ad24xx_clk_probe(struct device *dev)
 {
 	struct a2b_func *func = to_a2b_func(dev);
+	struct a2b_node *node = func->node;
 	struct device_node *np = dev->of_node;
 	const char *sync_clk_name;
 	struct ad24xx_clk *adclk;
 	int num_clks;
 	int ret;
 	int i;
+
+	/*
+	 * Older series AD240x and AD241x chips have a single discrete
+	 * A2B_CLKCFG register that behaves differently to the A2B_CLKnCFG
+	 * registers of the later AD242x series. This driver only supports the
+	 * latter right now.
+	 */
+	if (!(node->chip_info->caps & A2B_CHIP_CAP_CLKOUT))
+		return -ENODEV;
 
 	adclk = devm_kzalloc(dev, sizeof(*adclk), GFP_KERNEL);
 	if (!adclk)
@@ -245,7 +255,7 @@ static int ad24xx_clk_probe(struct device *dev)
 
 	adclk->dev = dev;
 	adclk->func = func;
-	adclk->node = func->node;
+	adclk->node = node;
 	dev_set_drvdata(dev, adclk);
 
 	num_clks = of_property_count_strings(np, "clock-output-names");
@@ -298,21 +308,14 @@ static int ad24xx_clk_probe(struct device *dev)
 }
 
 static const struct of_device_id ad24xx_clk_of_match_table[] = {
-	{
-		.compatible = "adi,ad2403-clk",
-	},
-	{
-		.compatible = "adi,ad2410-clk",
-	},
-	{
-		.compatible = "adi,ad2425-clk",
-	},
-	{
-		.compatible = "adi,ad2428-clk",
-	},
-	{
-		.compatible = "adi,ad2429-clk",
-	},
+	{ .compatible = "adi,ad2420-clk" },
+	{ .compatible = "adi,ad2421-clk" },
+	{ .compatible = "adi,ad2422-clk" },
+	{ .compatible = "adi,ad2425-clk" },
+	{ .compatible = "adi,ad2426-clk" },
+	{ .compatible = "adi,ad2427-clk" },
+	{ .compatible = "adi,ad2428-clk" },
+	{ .compatible = "adi,ad2429-clk" },
 	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, ad24xx_clk_of_match_table);

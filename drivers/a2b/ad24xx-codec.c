@@ -17,9 +17,8 @@
 #include <linux/regmap.h>
 #include <sound/soc.h>
 
-#define AD24XX_RATES_SUB_48                                                   \
-	(/* SNDRV_PCM_RATE_{12000,24000} missing? | */ SNDRV_PCM_RATE_48000 | \
-	 SNDRV_PCM_RATE_96000 | SNDRV_PCM_RATE_192000)
+#define AD24XX_RATES_SUB_48 \
+	(SNDRV_PCM_RATE_48000 | SNDRV_PCM_RATE_96000 | SNDRV_PCM_RATE_192000)
 #define AD24XX_RATES_SUB_44_1                                                 \
 	(SNDRV_PCM_RATE_11025 | SNDRV_PCM_RATE_22050 | SNDRV_PCM_RATE_44100 | \
 	 SNDRV_PCM_RATE_88200 | SNDRV_PCM_RATE_176400)
@@ -128,11 +127,14 @@ static const struct snd_kcontrol_new ad24xx_codec_controls_main[] = {
 
 static const struct snd_kcontrol_new ad24xx_codec_controls_sub[] = {
 	SOC_SINGLE("Broadcast Downstream Slots", A2B_BCDNSLOTS, 0, 32, 0),
-	SOC_SINGLE("Downstream Broadcast Mask Enable", A2B_LDNSLOTS, 7, 1, 0),
 	SOC_SINGLE("Downstream Slots Targeted", A2B_LDNSLOTS, 0, 32, 0),
 	SOC_SINGLE("Upstream Slots Generated", A2B_LUPSLOTS, 0, 32, 0),
 	SOC_SINGLE("Downstream Slots", A2B_DNSLOTS, 0, 32, 0),
 	SOC_SINGLE("Upstream Slots", A2B_UPSLOTS, 0, 32, 0),
+};
+
+static const struct snd_kcontrol_new ad24xx_codec_controls_data_rx_mask[] = {
+	SOC_SINGLE("Downstream Broadcast Mask Enable", A2B_LDNSLOTS, 7, 1, 0),
 	SND_SOC_BYTES("Upstream Data RX Mask", A2B_UPMASK0, 4),
 	SOC_SINGLE("Local Upstream Channel Offset", A2B_UPOFFSET, 0, 31, 0),
 	SND_SOC_BYTES("Downstream Data RX Mask", A2B_DNMASK0, 4),
@@ -536,8 +538,19 @@ static const struct snd_soc_dai_driver ad24xx_codec_dai_drv[] = {
 static int ad24xx_codec_component_probe(struct snd_soc_component *component)
 {
 	struct ad24xx_codec *adc = snd_soc_component_get_drvdata(component);
+	struct a2b_node *node = adc->node;
+	int ret;
 
 	snd_soc_component_init_regmap(component, adc->regmap);
+
+	if (is_a2b_sub(node) &&
+	    (node->chip_info->caps & A2B_CHIP_CAP_DATA_RX_MASK)) {
+		ret = snd_soc_add_component_controls(
+			component, ad24xx_codec_controls_data_rx_mask,
+			ARRAY_SIZE(ad24xx_codec_controls_data_rx_mask));
+		if (ret)
+			return ret;
+	}
 
 	return 0;
 }
@@ -636,21 +649,11 @@ static int ad24xx_codec_probe(struct device *dev)
 }
 
 static const struct of_device_id ad24xx_codec_of_match_table[] = {
-	{
-		.compatible = "adi,ad2403-codec",
-	},
-	{
-		.compatible = "adi,ad2410-codec",
-	},
-	{
-		.compatible = "adi,ad2425-codec",
-	},
-	{
-		.compatible = "adi,ad2428-codec",
-	},
-	{
-		.compatible = "adi,ad2429-codec",
-	},
+	{ .compatible = "adi,ad2403-codec" },
+	{ .compatible = "adi,ad2410-codec" },
+	{ .compatible = "adi,ad2425-codec" },
+	{ .compatible = "adi,ad2428-codec" },
+	{ .compatible = "adi,ad2429-codec" },
 	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, ad24xx_codec_of_match_table);
