@@ -1,0 +1,132 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/a2b/adi,a2b-audio-graph-card2.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Generic A2B sound card
+
+maintainers:
+  - Alvin Šipraga <alsi@bang-olufsen.dk>
+
+allOf:
+  - $ref: audio-graph-card2.yaml#
+
+properties:
+  adi,a2b-bus:
+    description: The parent A2B bus of codecs used by this sound card
+    $ref: /schemas/types.yaml#/definitions/phandle
+
+  adi,minimum-a2b-nodes:
+    description: The minimum number of available A2B nodes required for this
+      sound card to be considered operable.
+    $ref: /schemas/types.yaml#/definitions/uint32
+
+required:
+  - adi,a2b-bus
+
+unevaluatedProperties: false
+
+examples:
+  # This sound card can run with or without the last node discovered
+  - |
+    sound {
+      compatible = "adi,a2b-audio-graph-card2";
+      adi,a2b-bus = <&a2b>;
+      adi,minimum-a2b-nodes = <2>;
+      links = <&cpu
+               &sound_a2b0_ep
+               &sound_a2b1_ep
+               &sound_a2b2_ep>;
+      widgets = "Speaker", "Speakers";
+      ... TODO
+    };
+
+    cpu {
+      compatible = "cpu-driver"; TODO better name?
+    };
+
+    sync_clk: sync-clock {
+          compatible = "fixed-clock";
+          #clock-cells = <0>;
+          clock-frequency = <48000>;
+    };
+
+    i2c {
+      #address-cells = <1>;
+      #size-cells = <0>;
+
+      a2b: a2b@68 {
+        compatible = "adi,ad2428";
+        reg-names = "base", "bus";
+        reg = <0x68>, <0x69>;
+        clock-names = "sync";
+        clocks = <&sync_clk>;
+        #address-cells = <1>;
+        #size-cells = <0>;
+        interrupts = <42>;
+        interrupt-controller;
+        #interrupt-cells = <1>;
+
+        node@0 {
+          compatible = "adi,ad2428";
+          reg = <0>;
+          interrupts = <0>;
+          adi,tdm-mode = <16>;
+          adi,tdm-slot-size = <32>;
+
+          codec {
+            compatible = "adi,ad2428-codec";
+            #sound-dai-cells = <0>;
+            sound-name-prefix = "A2B Main";
+          };
+        };
+
+        node@1 {
+          compatible = "adi,ad2425";
+          reg = <1>;
+          interrupts = <1>;
+          adi,tdm-mode = <8>;
+          adi,tdm-slot-size = <32>;
+
+          gpio {
+            compatible = "adi,ad2425-gpio";
+            interrupt-controller;
+            #interrupt-cells = <2>;
+            gpio-controller;
+            #gpio-cells = <2>;
+          };
+
+          codec {
+            compatible = "adi,ad2425-codec";
+            #sound-dai-cells = <0>;
+            sound-name-prefix = "A2B Sub1";
+          };
+
+          i2c {
+            compatible = "adi,2425-i2c-master";
+            #address-cells = <1>;
+            #size-cells = <0>;
+
+            eeprom@50 {
+              compatible = "atmel,24c64";
+              reg = <0x50>;
+            };
+          };
+        };
+
+        node@2 {
+          compatible = "adi,ad2425";
+          reg = <1>;
+          interrupts = <1>;
+          adi,tdm-mode = <16>;
+          adi,tdm-slot-size = <32>;
+
+          codec {
+            compatible = "adi,ad2425-codec";
+            #sound-dai-cells = <0>;
+            sound-name-prefix = "A2B Sub2";
+          };
+        };
+      };
+    };

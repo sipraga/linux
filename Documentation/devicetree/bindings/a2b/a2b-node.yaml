@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/a2b/a2b-node.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Analog Devices Inc. Automotive Audio Bus A2B transceiver node
+
+description: A node on an A2B bus, either in main or subordinate mode.
+
+maintainers:
+  - Alvin Šipraga <alsi@bang-olufsen.dk>
+
+allOf:
+  - $ref: /schemas/interrupt-controller.yaml#
+
+properties:
+  $nodename:
+    pattern: "^node@[0-9]+$"
+
+  reg:
+    description: The node's address in the A2B bus. Main nodes have address 0.
+
+  interrupts:
+    description: The node's interrupt; should be the same as the reg property.
+
+  interrupt-controller: true
+
+  '#interrupt-cells':
+    const: 1
+
+patternProperties:
+  "^node@[0-9]+$":
+    $ref: a2b-node.yaml#
+    unevaluatedProperties: false
+
+required:
+  - reg
+  - interrupts
+
+additionalProperties: true
