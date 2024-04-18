@@ -191,10 +191,9 @@ static int ad24xx_codec_set_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 	struct ad24xx_codec *adc = snd_soc_component_get_drvdata(component);
 	bool bclk_invert;
 	unsigned int val;
-	unsigned int mask;
 	int ret;
 
-	/* Main node must be BCLK/FSYNC consumer, subordinate node consumer */
+	/* Main node must be BCLK/FSYNC consumer, subordinate node provider */
 	if ((fmt & SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK) !=
 	    (is_a2b_main(adc->node) ? SND_SOC_DAIFMT_CBC_CFC :
 				      SND_SOC_DAIFMT_CBP_CFP))
@@ -240,9 +239,11 @@ static int ad24xx_codec_set_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 		return -EINVAL;
 	}
 
-	mask = A2B_I2SCFG_RXBCLKINV_MASK | A2B_I2SCFG_RXBCLKINV_MASK;
-	val = bclk_invert ? mask : 0;
-	ret = regmap_update_bits(adc->regmap, A2B_I2SCFG, mask, val);
+	val = bclk_invert ? A2B_I2SCFG_RXBCLKINV_MASK :
+			    A2B_I2SCFG_TXBCLKINV_MASK;
+	ret = regmap_update_bits(
+		adc->regmap, A2B_I2SCFG,
+		A2B_I2SCFG_TXBCLKINV_MASK | A2B_I2SCFG_RXBCLKINV_MASK, val);
 	if (ret)
 		return ret;
 
