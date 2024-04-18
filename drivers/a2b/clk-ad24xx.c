@@ -61,15 +61,15 @@ static struct ad24xx_clk *to_ad24xx_clk(struct ad24xx_clkout *clkout)
  * The pre-divide is either 2 or 32. The divisor is between 1 and 16.
  *
  * The pre-divide register PDIV is 1 bit and selects between 2 (0) or 32 (1).
- * The divide register DIV is 4 bit and the resultant divisor is DIV + 1.
+ * The divide register DIV is 4 bit and the resultant divisor is 2 * (DIV + 1).
  */
 
 #define VAL(_pdiv, _div) \
 	(((_pdiv) << A2B_CLKCFG_PDIV_SHIFT) | ((_div) << A2B_CLKCFG_DIV_SHIFT))
-#define DIV(_div) ((_div) + 1)
+#define DIV(_div) (2 * ((_div) + 1))
 
 /* In total there are 6 bits to the value, with the 4th bit going unused */
-#define AD24XX_CLK_DIV_WIDTH 5
+#define AD24XX_CLK_DIV_WIDTH 6
 static const struct clk_div_table ad24xx_clk_div_table[] = {
 	{ VAL(0, 0), 2 * DIV(0) },    { VAL(0, 1), 2 * DIV(1) },
 	{ VAL(0, 2), 2 * DIV(2) },    { VAL(0, 3), 2 * DIV(3) },
@@ -87,6 +87,7 @@ static const struct clk_div_table ad24xx_clk_div_table[] = {
 	{ VAL(1, 10), 32 * DIV(10) }, { VAL(1, 11), 32 * DIV(11) },
 	{ VAL(1, 12), 32 * DIV(12) }, { VAL(1, 13), 32 * DIV(13) },
 	{ VAL(1, 14), 32 * DIV(14) }, { VAL(1, 15), 32 * DIV(15) },
+	{ /* sentinel */ }
 };
 
 static int ad24xx_clk_prepare(struct clk_hw *hw)
