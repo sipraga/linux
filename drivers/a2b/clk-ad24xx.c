@@ -230,6 +230,7 @@ static int ad24xx_clk_probe(struct device *dev)
 	struct a2b_func *func = to_a2b_func(dev);
 	struct a2b_node *node = func->node;
 	struct device_node *np = dev->of_node;
+	char *pll_name;
 	const char *sync_clk_name;
 	struct ad24xx_clk *adclk;
 	int num_clks;
@@ -267,9 +268,13 @@ static int ad24xx_clk_probe(struct device *dev)
 	 * Register the PLL internally to use it as the parent of the CLKOUTs.
 	 * The PLL runs at 2048 times the SYNC clock rate.
 	 */
+	pll_name =
+		devm_kasprintf(dev, GFP_KERNEL, "%s_pll", dev_name(&node->dev));
+	if (!pll_name)
+		return -ENOMEM;
 	sync_clk_name = __clk_get_name(a2b_node_get_sync_clk(func->node));
 	adclk->pll_hw = devm_clk_hw_register_fixed_factor(
-		dev, "pll", sync_clk_name, 0, 2048, 1);
+		dev, pll_name, sync_clk_name, 0, 2048, 1);
 	if (IS_ERR(adclk->pll_hw))
 		return PTR_ERR(adclk->pll_hw);
 
