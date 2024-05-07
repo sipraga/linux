@@ -149,20 +149,11 @@ static const struct snd_kcontrol_new ad24xx_codec_controls_data_rx_mask[] = {
 {	.id = snd_soc_dapm_decoder, .name = wname, .sname = stname, \
 	SND_SOC_DAPM_INIT_REG_VAL(wreg, wshift, winvert), }
 
-static const struct snd_soc_dapm_widget ad24xx_codec_dapm_widgets_main[] = {
+static const struct snd_soc_dapm_widget ad24xx_codec_dapm_widgets[] = {
 	SND_SOC_DAPM_AIF_IN("RX0", NULL, 0, A2B_I2SCFG, 4, 0),
 	SND_SOC_DAPM_AIF_IN("RX1", NULL, 0, A2B_I2SCFG, 5, 0),
 	SND_SOC_DAPM_AIF_OUT("TX0", NULL, 0, A2B_I2SCFG, 0, 0),
 	SND_SOC_DAPM_AIF_OUT("TX1", NULL, 0, A2B_I2SCFG, 1, 0),
-	SND_SOC_DAPM_ENCODER("ENC", NULL, SND_SOC_NOPM, 0, 0),
-	SND_SOC_DAPM_DECODER("DEC", NULL, SND_SOC_NOPM, 0, 0),
-};
-
-static const struct snd_soc_dapm_widget ad24xx_codec_dapm_widgets_sub[] = {
-	SND_SOC_DAPM_AIF_OUT("TX0", NULL, 0, A2B_I2SCFG, 0, 0),
-	SND_SOC_DAPM_AIF_OUT("TX1", NULL, 0, A2B_I2SCFG, 1, 0),
-	SND_SOC_DAPM_AIF_IN("RX0", NULL, 0, A2B_I2SCFG, 4, 0),
-	SND_SOC_DAPM_AIF_IN("RX1", NULL, 0, A2B_I2SCFG, 5, 0),
 	SND_SOC_DAPM_ENCODER("ENC", NULL, SND_SOC_NOPM, 0, 0),
 	SND_SOC_DAPM_DECODER("DEC", NULL, SND_SOC_NOPM, 0, 0),
 };
@@ -560,8 +551,8 @@ static const struct snd_soc_component_driver ad24xx_codec_component_drv_main = {
 	.probe = ad24xx_codec_component_probe,
 	.controls = ad24xx_codec_controls_main,
 	.num_controls = ARRAY_SIZE(ad24xx_codec_controls_main),
-	.dapm_widgets = ad24xx_codec_dapm_widgets_main,
-	.num_dapm_widgets = ARRAY_SIZE(ad24xx_codec_dapm_widgets_main),
+	.dapm_widgets = ad24xx_codec_dapm_widgets,
+	.num_dapm_widgets = ARRAY_SIZE(ad24xx_codec_dapm_widgets),
 	.dapm_routes = ad24xx_codec_dapm_routes_main,
 	.num_dapm_routes = ARRAY_SIZE(ad24xx_codec_dapm_routes_main),
 	.endianness = 1,
@@ -571,8 +562,8 @@ static const struct snd_soc_component_driver ad24xx_codec_component_drv_sub = {
 	.probe = ad24xx_codec_component_probe,
 	.controls = ad24xx_codec_controls_sub,
 	.num_controls = ARRAY_SIZE(ad24xx_codec_controls_sub),
-	.dapm_widgets = ad24xx_codec_dapm_widgets_sub,
-	.num_dapm_widgets = ARRAY_SIZE(ad24xx_codec_dapm_widgets_sub),
+	.dapm_widgets = ad24xx_codec_dapm_widgets,
+	.num_dapm_widgets = ARRAY_SIZE(ad24xx_codec_dapm_widgets),
 	.dapm_routes = ad24xx_codec_dapm_routes_sub,
 	.num_dapm_routes = ARRAY_SIZE(ad24xx_codec_dapm_routes_sub),
 	.endianness = 1,
