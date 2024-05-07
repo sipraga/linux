@@ -353,8 +353,8 @@ struct a2b_bus_ops;
  * in progress and the number of available nodes is not yet determined
  */
 enum a2b_bus_status {
-	A2B_BUS_STATUS_DISCOVERY,
 	A2B_BUS_STATUS_DISCOVERING,
+	A2B_BUS_STATUS_DISCOVERY,
 	A2B_BUS_STATUS_END,
 };
 
