@@ -17,14 +17,14 @@
 #include <sound/simple_card_utils.h>
 #include <linux/version.h>
 
+/* Assume nobody uses more than 5 A2B buses at once */
+#define MAX_A2BS 5
+
 struct a2b_graph_priv {
 	struct device *dev;
 	struct simple_util_priv simple_priv;
-	struct device_node *a2b_np;
-	struct a2b_bus *a2b_bus;
-	struct notifier_block a2b_nb;
-	struct completion a2b_completion;
-	int a2b_nodes;
+	unsigned int num_a2bs;
+	unsigned int num_a2b_nodes[MAX_A2BS];
 };
 
 #define simple_to_a2b_graph(simple) \
@@ -146,6 +146,7 @@ static int a2b_graph_hook_skip_link(struct simple_util_priv *simple_priv,
 	struct device_node *np;
 	u32 reg = U32_MAX;
 	bool skip = false;
+	int i;
 
 	/*
 	 * Check which A2B node the codec lives on. If that node has not been
@@ -196,9 +197,24 @@ static int a2b_graph_hook_skip_link(struct simple_util_priv *simple_priv,
 	np = of_graph_get_remote_endpoint(ep);
 	of_node_put(ep);
 	while (np) {
-		if (np == priv->a2b_np) {
+		bool is_a2b = false;
+
+		for (i = 0; i < priv->num_a2bs; i++) {
+			struct device_node *a2b_np = of_parse_phandle(
+				priv->dev->of_node, "adi,a2b-bus", i);
+
+			if (np == a2b_np) {
+				of_node_put(a2b_np);
+				is_a2b = true;
+				break;
+			}
+
+			of_node_put(a2b_np);
+		}
+
+		if (is_a2b) {
 			of_node_put(np);
-			if (reg >= priv->a2b_nodes)
+			if (reg >= priv->num_a2b_nodes[i])
 				skip = true;
 			break;
 		}
@@ -217,27 +233,61 @@ static struct graph2_custom_hooks a2b_graph_hooks = {
 	.hook_skip_link = a2b_graph_hook_skip_link,
 };
 
-static int a2b_graph_a2b_notify(struct notifier_block *nb, unsigned long event,
-				void *data)
+static int a2b_graph_get_a2bs(struct a2b_graph_priv *priv)
 {
-	struct a2b_graph_priv *priv =
-		container_of(nb, struct a2b_graph_priv, a2b_nb);
+	struct device *dev = priv->dev;
+	int num_a2bs;
+	int i;
 
-	switch (event) {
-	case A2B_BUS_EVENT_DISCOVERY_DONE:
-		if (priv->a2b_nodes)
-			break;
+	num_a2bs =
+		of_count_phandle_with_args(dev->of_node, "adi,a2b-bus", NULL);
+	if (num_a2bs <= 0)
+		return 0;
+	else if (num_a2bs > MAX_A2BS)
+		return -E2BIG;
 
-		priv->a2b_nodes = a2b_bus_num_nodes(priv->a2b_bus);
+	for (i = 0; i < num_a2bs; i++) {
+		struct device_node *np;
+		struct a2b_bus *a2b_bus;
+		unsigned int num_a2b_nodes;
+		unsigned int min_a2b_nodes;
 
-		complete(&priv->a2b_completion);
+		np = of_parse_phandle(dev->of_node, "adi,a2b-bus", i);
+		if (!np)
+			return -EINVAL;
 
-		break;
-	default:
-		break;
+		a2b_bus = a2b_find_bus_by_of_node(np);
+		if (!a2b_bus) {
+			of_node_put(np);
+			return -EPROBE_DEFER;
+		}
+
+		if (a2b_bus_status(a2b_bus) & BIT(A2B_BUS_STATUS_DISCOVERY)) {
+			a2b_put_bus(a2b_bus);
+			of_node_put(np);
+			return -EPROBE_DEFER;
+		}
+
+		num_a2b_nodes = a2b_bus_num_nodes(a2b_bus);
+		a2b_put_bus(a2b_bus);
+		of_node_put(np);
+
+		if (of_property_read_u32_index(dev->of_node,
+					       "adi,minimum-a2b-nodes", i,
+					       &min_a2b_nodes))
+			min_a2b_nodes = 1;
+		else if (min_a2b_nodes == 0)
+			return -EINVAL;
+
+		if (num_a2b_nodes < min_a2b_nodes)
+			return -ENODEV;
+
+		priv->num_a2b_nodes[i] = num_a2b_nodes;
 	}
 
-	return NOTIFY_OK;
+	priv->num_a2bs = num_a2bs;
+
+	return 0;
 }
 
 static int a2b_graph_probe(struct platform_device *pdev)
@@ -247,7 +297,6 @@ static int a2b_graph_probe(struct platform_device *pdev)
 	struct snd_soc_card *card;
 	struct device *dev = &pdev->dev;
 	struct device_node *np;
-	unsigned int min_a2b_nodes;
 	int ret;
 
 	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
@@ -255,13 +304,7 @@ static int a2b_graph_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	platform_set_drvdata(pdev, priv);
-
 	priv->dev = dev;
-	priv->a2b_np = of_parse_phandle(dev->of_node, "adi,a2b-bus", 0);
-	if (!priv->a2b_np)
-		return -EINVAL;
-	init_completion(&priv->a2b_completion);
-
 	simple_priv = &priv->simple_priv;
 
 	/*
@@ -270,46 +313,6 @@ static int a2b_graph_probe(struct platform_device *pdev)
 	 */
 	card = simple_priv_to_card(simple_priv);
 	card->component_chaining = 1;
-
-	priv->a2b_bus = a2b_find_bus_by_of_node(priv->a2b_np);
-	if (!priv->a2b_bus) {
-		of_node_put(priv->a2b_np);
-		return -EPROBE_DEFER;
-	}
-
-	priv->a2b_nb.notifier_call = a2b_graph_a2b_notify;
-	ret = a2b_bus_register_notifier(priv->a2b_bus, &priv->a2b_nb);
-	if (ret) {
-		a2b_put_bus(priv->a2b_bus);
-		of_node_put(priv->a2b_np);
-		return ret;
-	}
-
-	if (!(a2b_bus_status(priv->a2b_bus) & BIT(A2B_BUS_STATUS_DISCOVERY)))
-		/*
-		 * Discovery has already finished on the A2B bus. Store
-		 * the number of nodes on the bus for usage in link
-		 * enumeration.
-		 */
-		priv->a2b_nodes = a2b_bus_num_nodes(priv->a2b_bus);
-	else {
-		/*
-		 * Discovery has not yet finished on the A2B bus. Wait
-		 * for up to 1 second and then try to probe. A timeout
-		 * is not fatal as sometimes the bus can take a long time
-		 * to discover if intermediate nodes require special firmware
-		 * to be loaded before the discovery process continues.
-		 */
-		if (!wait_for_completion_timeout(&priv->a2b_completion,
-						 msecs_to_jiffies(1000))) {
-			dev_dbg(dev, "timeout waiting for A2B discovery\n");
-			a2b_bus_unregister_notifier(priv->a2b_bus,
-						    &priv->a2b_nb);
-			a2b_put_bus(priv->a2b_bus);
-			of_node_put(priv->a2b_np);
-			return -EPROBE_DEFER;
-		}
-	}
 
 	/*
 	 * HACK: To allow probing even with fw_devlink=on, purge unwanted device
@@ -327,38 +330,14 @@ static int a2b_graph_probe(struct platform_device *pdev)
 	for_each_child_of_node(dev->of_node, np)
 		fw_devlink_purge_absent_suppliers(&np->fwnode);
 
-	/* Done with the A2B bus, clean up */
-	a2b_bus_unregister_notifier(priv->a2b_bus, &priv->a2b_nb);
-	a2b_put_bus(priv->a2b_bus);
-
-	/*
-	 * If only a single (main) A2B node is available after discovery, then
-	 * the sound card may be inoperable due to an absence of any BE
-	 * DAI-links. Unless configured otherwise, conclude that no suitable A2B
-	 * devices are connected and return -ENODEV rather than indefinitely
-	 * deferring probe or registering a useless device.
-	 *
-	 * Note that there is always at least one node, so a value of 0 is
-	 * invalid.
-	 */
-	if (of_property_read_u32(dev->of_node, "adi,minimum-a2b-nodes",
-				 &min_a2b_nodes))
-		min_a2b_nodes = 1;
-	else if (min_a2b_nodes == 0)
-		return -EINVAL;
-
-	if (priv->a2b_nodes < min_a2b_nodes)
-		return -ENODEV;
+	ret = a2b_graph_get_a2bs(priv);
+	if (ret)
+		return ret;
 
 	/* Start the audio-graph-card2 probe */
 	ret = audio_graph2_parse_of(simple_priv, dev, &a2b_graph_hooks);
-	if (ret) {
-		of_node_put(priv->a2b_np);
+	if (ret)
 		return ret;
-	}
-
-	of_node_put(priv->a2b_np);
-	priv->a2b_np = NULL;
 
 	return 0;
 }

@@ -14,12 +14,12 @@ allOf:
 
 properties:
   adi,a2b-bus:
-    description: The parent A2B bus of codecs used by this sound card
-    $ref: /schemas/types.yaml#/definitions/phandle
+    description: The parent A2B buses of codecs used by this sound card
+    $ref: /schemas/types.yaml#/definitions/phandle-array
 
   adi,minimum-a2b-nodes:
     description: The minimum number of available A2B nodes required for this
-      sound card to be considered operable.
+      sound card to be considered operable. One for each A2B bus specified.
     $ref: /schemas/types.yaml#/definitions/uint32
 
 required:
