@@ -211,10 +211,11 @@ struct a2b_node {
 	unsigned int early_sync : 1;
 	unsigned int alternating_sync : 1;
 	unsigned int rx_on_dtx1 : 1;
+	unsigned int swmode_1: 1;
 	enum a2b_tdm_mode tdm_mode;
 	enum a2b_tdm_slot_size tdm_slot_size;
 	void *priv;
-	
+
 	/* A2B core only */
 	struct device dev;
 	bool setup;

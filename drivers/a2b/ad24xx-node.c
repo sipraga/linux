@@ -354,10 +354,19 @@ int ad24xx_node_set_switching(struct a2b_node *node, bool enable,
 	unsigned int val;
 	int ret;
 
+	/*
+	 * Use external switch mode 1 instead of 0. This indicates that the
+	 * downstream node is not using A2B bus power and is not properly
+	 * terminating the bias. See [1] section 7-11 "Switch Control Register"
+	 * for more information.
+	 */
+	if (node->swmode_1 && mode == A2B_SWMODE_0)
+		mode = A2B_SWMODE_1;
+
 	dev_dbg(&node->dev, "%s switching, mode %d\n",
 		enable ? "enable" : "disable", mode);
 
-	val = FIELD_PREP(A2B_SWCTL_ENSW_MASK, !!enable) |
+	val = FIELD_PREP(A2B_SWCTL_ENSW_MASK, enable) |
 	      FIELD_PREP(A2B_SWCTL_MODE_MASK, mode);
 
 	ret = regmap_write(adn->regmap, A2B_SWCTL, val);
@@ -559,6 +568,8 @@ int ad24xx_node_setup(struct a2b_node *node)
 		node->alternating_sync = 1;
 	if (of_property_present(np, "adi,rx-on-dtx1"))
 		node->rx_on_dtx1 = 1;
+	if (of_property_present(np, "adi,a2b-external-switch-mode-1"))
+		node->swmode_1 = 1;
 
 	node->priv = adn;
 
