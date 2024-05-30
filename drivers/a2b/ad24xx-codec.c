@@ -32,6 +32,7 @@ struct ad24xx_codec {
 	struct regmap *regmap;
 	struct snd_soc_dai_driver *dai_drv;
 	struct a2b_slot_config slot_config;
+	unsigned int active_substreams;
 };
 
 static const char *const ad24xx_codec_slot_format_text[] = {
@@ -150,15 +151,26 @@ static const struct snd_kcontrol_new ad24xx_codec_controls_data_rx_mask[] = {
 	SND_SOC_DAPM_INIT_REG_VAL(wreg, wshift, winvert), }
 
 static const struct snd_soc_dapm_widget ad24xx_codec_dapm_widgets[] = {
+	/* TODO: Put "I2S Playback"/"Capture" as stream name? */
 	SND_SOC_DAPM_AIF_IN("RX0", NULL, 0, A2B_I2SCFG, 4, 0),
 	SND_SOC_DAPM_AIF_IN("RX1", NULL, 0, A2B_I2SCFG, 5, 0),
 	SND_SOC_DAPM_AIF_OUT("TX0", NULL, 0, A2B_I2SCFG, 0, 0),
 	SND_SOC_DAPM_AIF_OUT("TX1", NULL, 0, A2B_I2SCFG, 1, 0),
 	SND_SOC_DAPM_ENCODER("ENC", NULL, SND_SOC_NOPM, 0, 0),
 	SND_SOC_DAPM_DECODER("DEC", NULL, SND_SOC_NOPM, 0, 0),
+	SND_SOC_DAPM_AIF_IN("TRXA DN", NULL, 0, SND_SOC_NOPM, 0, 0),
+	SND_SOC_DAPM_AIF_IN("TRXB UP", NULL, 0, SND_SOC_NOPM, 0, 0),
+	SND_SOC_DAPM_AIF_OUT("TRXA UP", NULL, 0, SND_SOC_NOPM, 0, 0),
+	SND_SOC_DAPM_AIF_OUT("TRXB DN", NULL, 0, SND_SOC_NOPM, 0, 0),
 };
 
 static const struct snd_soc_dapm_route ad24xx_codec_dapm_routes_main[] = {
+	{ "DEC", NULL, "TRXA DN" },
+	{ "DEC", NULL, "TRXB UP" },
+	{ "TRXA UP", NULL, "ENC" },
+	{ "TRXB DN", NULL, "ENC" },
+	{ "TRXB DN", NULL, "TRXA DN" },
+	{ "TRXA UP", NULL, "TRXB UP" },
 	{ "I2S Capture", NULL, "DEC" },
 	{ "TX0", NULL, "I2S Capture" },
 	{ "TX1", NULL, "I2S Capture" },
@@ -168,6 +180,12 @@ static const struct snd_soc_dapm_route ad24xx_codec_dapm_routes_main[] = {
 };
 
 static const struct snd_soc_dapm_route ad24xx_codec_dapm_routes_sub[] = {
+	{ "DEC", NULL, "TRXA DN" },
+	{ "DEC", NULL, "TRXB UP" },
+	{ "TRXA UP", NULL, "ENC" },
+	{ "TRXB DN", NULL, "ENC" },
+	{ "TRXB DN", NULL, "TRXA DN" },
+	{ "TRXA UP", NULL, "TRXB UP" },
 	{ "ENC", NULL, "I2S Capture" },
 	{ "I2S Capture", NULL, "RX0" },
 	{ "I2S Capture", NULL, "RX1" },
@@ -478,9 +496,13 @@ static int ad24xx_codec_hw_params(struct snd_pcm_substream *substream,
 
 
 	/* Finally, request slots */
-	ret = a2b_node_request_slots(adc->node, &slot_req);
-	if (ret)
-		return ret;
+	if (!adc->active_substreams) {
+		ret = a2b_node_request_slots(adc->node, &slot_req);
+		if (ret)
+			return ret;
+
+		adc->active_substreams |= BIT(substream->stream);
+	}
 
 	return 0;
 }
@@ -492,9 +514,13 @@ static int ad24xx_codec_hw_free(struct snd_pcm_substream *substream,
 	struct ad24xx_codec *adc = snd_soc_component_get_drvdata(component);
 	int ret;
 
-	ret = a2b_node_free_slots(adc->node);
-	if (ret)
-		return ret;
+	adc->active_substreams &= ~BIT(substream->stream);
+
+	if (!adc->active_substreams) {
+		ret = a2b_node_free_slots(adc->node);
+		if (ret)
+			return ret;
+	}
 
 	return 0;
 }
@@ -548,6 +574,7 @@ static int ad24xx_codec_component_probe(struct snd_soc_component *component)
 }
 
 static const struct snd_soc_component_driver ad24xx_codec_component_drv_main = {
+	.name = "ad24xx-codec",
 	.probe = ad24xx_codec_component_probe,
 	.controls = ad24xx_codec_controls_main,
 	.num_controls = ARRAY_SIZE(ad24xx_codec_controls_main),
@@ -559,6 +586,7 @@ static const struct snd_soc_component_driver ad24xx_codec_component_drv_main = {
 };
 
 static const struct snd_soc_component_driver ad24xx_codec_component_drv_sub = {
+	.name = "ad24xx-codec",
 	.probe = ad24xx_codec_component_probe,
 	.controls = ad24xx_codec_controls_sub,
 	.num_controls = ARRAY_SIZE(ad24xx_codec_controls_sub),
