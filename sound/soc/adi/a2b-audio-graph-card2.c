@@ -3,7 +3,9 @@
  * A custom audio-graph-card2 driver for A2B sound cards
  *
  * The card will defer its probe until the A2B bus has finished its discovery
- * process, after which any absent codecs will be skipped without error.
+ * process, after which any absent codecs will be skipped without error. It will
+ * also automatically glue the A2B fabric together in DAPM to ensure seamless
+ * DPCM operation.
  *
  * Copyright (c) 2023 Alvin Šipraga <alsi@bang-olufsen.dk>
  */
@@ -228,9 +230,88 @@ static int a2b_graph_hook_skip_link(struct simple_util_priv *simple_priv,
 	return skip ? 1 : 0;
 }
 
+static int a2b_graph_link_widgets(struct snd_soc_card *card,
+				  struct snd_soc_component *c1, const char *s1,
+				  struct snd_soc_component *c2, const char *s2)
+{
+	struct snd_soc_dapm_route route = {};
+	int ret;
+
+	route.source = kasprintf(GFP_KERNEL, "%s %s", c1->name_prefix, s1);
+	route.sink = kasprintf(GFP_KERNEL, "%s %s", c2->name_prefix, s2);
+
+	if (!route.source || !route.sink)
+		ret = -ENOMEM;
+	else
+		ret = snd_soc_dapm_add_routes(&card->dapm, &route, 1);
+
+	kfree(route.source);
+	kfree(route.sink);
+
+	return ret;
+}
+
+static int a2b_graph_card_late_probe(struct snd_soc_card *card)
+{
+	struct snd_soc_component *c1, *c2;
+	struct a2b_node *n1, *n2;
+	int ret;
+
+	/*
+	 * Connect A2B transceiver widgets together to ensure a coherent DPCM
+	 * topology. This ensures that hw_params will get set on the entire A2B
+	 * chain.
+	 */
+	for_each_card_components(card, c1) {
+		if (!c1->driver->name ||
+		    strcmp(c1->driver->name, "ad24xx-codec"))
+			continue;
+
+		for_each_card_components(card, c2) {
+			if (!c2->driver->name ||
+			    strcmp(c2->driver->name, "ad24xx-codec"))
+				continue;
+
+			n1 = to_a2b_func(c1->dev)->node;
+			n2 = to_a2b_func(c2->dev)->node;
+
+			/* Ensure nodes are on the same bus */
+			if (n1->bus != n2->bus)
+				continue;
+
+			/* Ensure n1 immediately precedes n2 in the A2B bus */
+			if (n1->addr > n2->addr || (n2->addr - n1->addr != 1))
+				continue;
+
+			/* Connect downstream and upstream transceivers */
+			ret = a2b_graph_link_widgets(card, c1, "TRXB DN", c2,
+						     "TRXA DN");
+			if (ret)
+				return ret;
+
+			ret = a2b_graph_link_widgets(card, c2, "TRXA UP", c1,
+						     "TRXB UP");
+			if (ret)
+				return ret;
+		}
+	}
+
+	return graph_util_card_probe(card);
+}
+
+static int a2b_graph_hook_post(struct simple_util_priv *priv)
+{
+	struct snd_soc_card *card = simple_priv_to_card(priv);
+
+	card->late_probe = a2b_graph_card_late_probe;
+
+	return 0;
+}
+
 static struct graph2_custom_hooks a2b_graph_hooks = {
 	.custom_dpcm = a2b_graph_dpcm,
 	.hook_skip_link = a2b_graph_hook_skip_link,
+	.hook_post = a2b_graph_hook_post,
 };
 
 static int a2b_graph_get_a2bs(struct a2b_graph_priv *priv)

@@ -444,8 +444,8 @@ void a2b_driver_unregister(struct a2b_driver *a2b_drv);
 #define module_a2b_driver(__a2b_driver) \
 	module_driver(__a2b_driver, a2b_driver_register, a2b_driver_unregister)
 
-#define to_a2b_node(dev) container_of_const(dev, struct a2b_node, dev)
-#define to_a2b_func(dev) container_of_const(dev, struct a2b_func, dev)
+#define to_a2b_node(d) container_of_const(d, struct a2b_node, dev)
+#define to_a2b_func(d) container_of_const(d, struct a2b_func, dev)
 
 extern const struct device_type a2b_node_type;
 extern const struct device_type a2b_func_type;
