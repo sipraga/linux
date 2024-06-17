@@ -179,6 +179,16 @@ static int ad24xx_i2c_xfer(struct a2b_bus *a2b_bus, const struct a2b_node *node,
 	if (ret < 0)
 		goto out;
 
+	/*
+	 * Unset peripheral bit, as when it is set, I2C writes to Auto-Broadcast
+	 * registers will otherwise always fail.
+	 */
+	nodeadr &= ~FIELD_PREP(A2B_NODEADR_PERI_MASK, 1);
+
+	ret = regmap_write(ad->base_regmap, A2B_NODEADR, nodeadr);
+	if (ret)
+		goto out;
+
 out:
 	mutex_unlock(&ad->mutex);
 
