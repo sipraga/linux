@@ -113,6 +113,52 @@ out:
 	return ret;
 }
 
+static int a2b_graph_parse_aux_devs(struct a2b_graph_priv *priv,
+				    struct device_node *lnk)
+{
+	struct simple_util_priv *simple_priv = &priv->simple_priv;
+	struct snd_soc_card *card = simple_priv_to_card(simple_priv);
+	struct device_node *np = of_node_get(lnk);
+	struct snd_soc_aux_dev *aux;
+	int num;
+	int ret = 0;
+	int i;
+
+	num = of_count_phandle_with_args(np, "aux-devs", NULL);
+	if (num == -ENOENT) {
+		goto out;
+	} else if (num < 0) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	aux = devm_krealloc(card->dev, (void *)card->aux_dev,
+			       sizeof(*aux) * (card->num_aux_devs + num),
+			       GFP_KERNEL);
+	if (!aux) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	for (i = 0; i < num; i++) {
+		int j = card->num_aux_devs + i; /* offset into routes */
+
+		aux[j].dlc.of_node = of_parse_phandle(np, "aux-devs", i);
+		if (!aux[j].dlc.of_node) {
+			ret = -EINVAL;
+			goto out;
+		}
+	}
+
+	card->aux_dev = aux;
+	card->num_aux_devs += num;
+
+out:
+	of_node_put(np);
+
+	return ret;
+}
+
 static int a2b_graph_dpcm(struct simple_util_priv *simple_priv,
 			  struct device_node *lnk, struct link_info *li)
 {
@@ -127,6 +173,11 @@ static int a2b_graph_dpcm(struct simple_util_priv *simple_priv,
 
 	/* Add any conditional routes necessary for this link */
 	ret = a2b_graph_parse_routes(priv, lnk);
+	if (ret)
+		return ret;
+
+	/* And aux devs too */
+	ret = a2b_graph_parse_aux_devs(priv, lnk);
 	if (ret)
 		return ret;
 
