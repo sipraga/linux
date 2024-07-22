@@ -651,11 +651,13 @@ int ad24xx_node_setup(struct a2b_node *node)
 
 		/*
 		 * Per the datasheet [2] Table 3, "Clock and Reset Timing (A2B
-		 * Master)", the typical PLL Lock Time t_PLK is 7.5 ms. Wait 30
-		 * ms to be on the safe side and avoid spurious timeouts.
+		 * Master)", the typical PLL Lock Time t_PLK is 7.5 ms. Wait 300
+		 * ms to be on the safe side and avoid spurious timeouts due to
+		 * IRQ latency. (TODO: Consider just polling register status
+		 * instead)
 		 */
 		timeout = wait_for_completion_interruptible_timeout(
-			&adn->running_completion, msecs_to_jiffies(30));
+			&adn->running_completion, msecs_to_jiffies(300));
 		reinit_completion(&adn->running_completion);
 		if (timeout < 0)
 			return timeout;
