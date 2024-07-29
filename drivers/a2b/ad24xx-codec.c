@@ -17,6 +17,11 @@
 #include <linux/regmap.h>
 #include <sound/soc.h>
 
+#define AD24XX_FORMATS_16 (SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_U16_LE)
+#define AD24XX_FORMATS_32                                    \
+	(SNDRV_PCM_FMTBIT_S24_LE | SNDRV_PCM_FMTBIT_U24_LE | \
+	 SNDRV_PCM_FMTBIT_S32_LE | SNDRV_PCM_FMTBIT_U32_LE)
+
 #define AD24XX_RATES_SUB_48 \
 	(SNDRV_PCM_RATE_48000 | SNDRV_PCM_RATE_96000 | SNDRV_PCM_RATE_192000)
 #define AD24XX_RATES_SUB_44_1                                                 \
@@ -634,10 +639,10 @@ static int ad24xx_codec_probe(struct device *dev)
 
 	if (adc->node->tdm_slot_size == A2B_TDMSS_32)
 		i2s_dai->playback.formats = i2s_dai->capture.formats =
-			SNDRV_PCM_FMTBIT_S32_LE;
+			AD24XX_FORMATS_32;
 	else
 		i2s_dai->playback.formats = i2s_dai->capture.formats =
-			SNDRV_PCM_FMTBIT_S16_LE;
+			AD24XX_FORMATS_16;
 
 	if (is_a2b_main(adc->node)) {
 		if (adc->node->sff == A2B_SFF_48000)
