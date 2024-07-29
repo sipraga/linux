@@ -805,6 +805,12 @@ static int ad24xx_node_probe(struct device *dev)
 	node->ops = is_a2b_main(node) ? &ad24xx_main_ops : &ad24xx_sub_ops;
 	node->chip_info = of_device_get_match_data(dev);
 
+	if (is_a2b_sub(node)) {
+		ret = a2b_discover_node(node);
+		if (ret)
+			return ret;
+	}
+
 	ret = a2b_register_node(node);
 	if (ret)
 		return ret;

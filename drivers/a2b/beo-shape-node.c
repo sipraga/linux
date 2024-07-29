@@ -378,36 +378,13 @@ static int beo_shape_node_write_fw(struct a2b_node *node,
 	return 0;
 }
 
-struct beo_shape_node {
-	bool resetting;
-};
-
-static int beo_shape_node_setup(struct a2b_node *node)
+static int beo_shape_node_update(struct a2b_node *node)
 {
-	struct beo_shape_node *shape;
 	const struct firmware *fw;
 	u32 fw_ver32;
 	u16 fw_ver;
 	int ret;
 	u8 flag;
-
-	if (node->priv)
-		shape = node->priv;
-	else {
-		shape = devm_kzalloc(&node->dev, sizeof(*shape), GFP_KERNEL);
-		if (!shape)
-			return -ENOMEM;
-
-		node->priv = shape;
-	}
-
-	/*
-	 * A reset command was already sent to flip the MCU into APP or DFU
-	 * mode. Nothing left to do until a bus drop. Just continue deferring
-	 * probe.
-	 */
-	if (shape->resetting)
-		return -EPROBE_DEFER;
 
 	ret = beo_shape_node_get_dfu_flag(node, &flag);
 	if (ret)
@@ -484,7 +461,6 @@ static int beo_shape_node_setup(struct a2b_node *node)
 				goto release_fw;
 
 			/* Expect a bus drop now */
-			shape->resetting = true;
 			ret = -EPROBE_DEFER;
 			goto release_fw;
 		}
@@ -503,7 +479,6 @@ static int beo_shape_node_setup(struct a2b_node *node)
 			goto release_fw;
 
 		/* Expect a bus drop now */
-		shape->resetting = true;
 		ret = -EPROBE_DEFER;
 		goto release_fw;
 	}
@@ -511,17 +486,14 @@ static int beo_shape_node_setup(struct a2b_node *node)
 release_fw:
 	release_firmware(fw);
 
-	if (ret)
-		return ret;
-
-	return ad24xx_node_setup(node);
+	return ret;
 }
 
 static struct a2b_node_ops beo_shape_node_ops = {
 	.set_respcycs = ad24xx_node_set_respcycs,
 	.set_switching = ad24xx_node_set_switching,
 	.is_last = ad24xx_node_is_last,
-	.setup = beo_shape_node_setup,
+	.setup = ad24xx_node_setup,
 	.teardown = ad24xx_node_teardown,
 };
 
@@ -530,8 +502,47 @@ static int beo_shape_node_probe(struct device *dev)
 	struct a2b_node *node = to_a2b_node(dev);
 	int ret;
 
+	if (is_a2b_main(node))
+		return -EINVAL;
+
 	node->ops = &beo_shape_node_ops;
 	node->chip_info = of_device_get_match_data(dev);
+
+	/*
+	 * Attempt discovery of this Shape, with caveats. This is mostly a hack
+	 * to work around the shortcomings of the A2B driver architecture and
+	 * the use of OF to describe maybe-present devices such as the Shape. To
+	 * be improved!
+	 *
+	 * 1. If it has already been discovered, assume that an APP<->DFU
+	 *    transition has been requested and that a bus drop is
+	 *    incoming. Request continued deferred probe until the underlying
+	 *    struct device has been torn down and recreated again.
+	 *
+	 * 2. If discovery fails because this Shape is not connected, trivially
+	 *    signal success so that a final device has probed; this kicks the
+	 *    deferred probe workqueue to retry (one more time) the A2B sound
+	 *    card which up until this point will have returned -EPROBE_DEFER
+	 *    due to ongoing enumeration of the bus.
+	 *
+	 * 3. On any other error, pass it upwards.
+	 */
+	ret = a2b_discover_node(node);
+	if (ret == -EALREADY)
+		return -EPROBE_DEFER;
+	else if (ret == -ENODEV)
+		return 0;
+	else if (ret)
+		return ret;
+
+	/*
+	 * Flash the shape if required, in which case this function will return
+	 * -EPROBE_DEFER until the STM32 has been reset and the new firmware is
+	 * ready.
+	 */
+	ret = beo_shape_node_update(node);
+	if (ret)
+		return ret;
 
 	ret = a2b_register_node(node);
 	if (ret)

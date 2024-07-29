@@ -10,7 +10,6 @@
 #include <linux/device.h>
 #include <linux/module.h>
 #include <linux/of.h>
-#include <linux/notifier.h>
 
 struct clk;
 struct i2c_msg;
@@ -219,8 +218,8 @@ struct a2b_node {
 	/* A2B core only */
 	struct device dev;
 	bool setup;
+	bool discovered;
 	struct a2b_bus *bus;
-	struct work_struct bus_drop_work;
 	unsigned int addr;
 	struct a2b_slot_req slot_req;
 	bool slots_requested;
@@ -324,6 +323,7 @@ int a2b_node_request_slots(struct a2b_node *node,
 			   struct a2b_slot_req *slot_req);
 int a2b_node_free_slots(struct a2b_node *node);
 
+int a2b_discover_node(struct a2b_node *node);
 int a2b_register_node(struct a2b_node *node);
 void a2b_unregister_node(struct a2b_node *node);
 
@@ -348,32 +348,15 @@ struct a2b_bus_ops;
 /**
  * enum a2b_bus_status - A2B bus status bits
  *
- * @A2B_BUS_STATUS_DISCOVERING - the main node is currently in discovery mode,
+ * @A2B_BUS_STATUS_DISCOVERY - the main node is currently in discovery mode,
  * i.e. DISCSTAT.DSCACT=1; used internally to ignore spurious bus errors
- * @A2B_BUS_STATUS_DISCOVERY - discovery (read: enumeration) of the whole bus is
- * in progress and the number of available nodes is not yet determined
+ * @A2B_BUS_STATUS_ENUMERATION - enumeration of the whole bus is in progress and
+ * the number of available nodes is not yet determined
  */
 enum a2b_bus_status {
-	A2B_BUS_STATUS_DISCOVERING,
 	A2B_BUS_STATUS_DISCOVERY,
+	A2B_BUS_STATUS_ENUMERATION,
 	A2B_BUS_STATUS_END,
-};
-
-struct a2b_bus_event_data {
-	union {
-		struct {
-			unsigned int num_nodes;
-		} discovery_done;
-	};
-};
-
-/**
- * enum a2b_bus_event - events that are sent on the bus' blocking notifier chain
- *
- * @A2B_BUS_EVENT_DISCOVERY_DONE - discovery has finished
- */
-enum a2b_bus_event {
-	A2B_BUS_EVENT_DISCOVERY_DONE,
 };
 
 struct a2b_bus {
@@ -383,14 +366,14 @@ struct a2b_bus {
 	void *priv;
 
 	/* A2B core only */
+	bool killed;
 	struct device dev;
 	int id;
 	struct mutex mutex;
 	struct a2b_node *nodes[A2B_MAX_NODES];
 	unsigned int main_respcycs;
 	unsigned long status;
-	struct delayed_work discovery_work;
-	struct blocking_notifier_head notifier;
+	struct delayed_work enumeration_work;
 };
 
 int a2b_register_bus(struct a2b_bus *bus);
@@ -400,8 +383,6 @@ void a2b_put_bus(struct a2b_bus *bus);
 unsigned long a2b_bus_status(struct a2b_bus *bus);
 unsigned int a2b_bus_num_subs(struct a2b_bus *bus);
 unsigned int a2b_bus_num_nodes(struct a2b_bus *bus);
-int a2b_bus_register_notifier(struct a2b_bus *bus, struct notifier_block *nb);
-int a2b_bus_unregister_notifier(struct a2b_bus *bus, struct notifier_block *nb);
 
 /**
  * a2b_bus_ops - A2B host bus operations

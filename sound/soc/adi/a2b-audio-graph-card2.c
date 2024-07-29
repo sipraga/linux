@@ -394,7 +394,7 @@ static int a2b_graph_get_a2bs(struct a2b_graph_priv *priv)
 			return -EPROBE_DEFER;
 		}
 
-		if (a2b_bus_status(a2b_bus) & BIT(A2B_BUS_STATUS_DISCOVERY)) {
+		if (a2b_bus_status(a2b_bus) & BIT(A2B_BUS_STATUS_ENUMERATION)) {
 			a2b_put_bus(a2b_bus);
 			of_node_put(np);
 			return -EPROBE_DEFER;

@@ -90,6 +90,16 @@ static struct a2b_node *__a2b_bus_main_node(struct a2b_bus *bus)
 	return bus->nodes[A2B_MAIN_ADDR];
 }
 
+static struct a2b_node *__a2b_bus_prev_node(struct a2b_node *node)
+{
+	struct a2b_bus *bus = node->bus;
+
+	if (is_a2b_main(node))
+		return NULL;
+
+	return bus->nodes[node->addr - 1];
+}
+
 static struct a2b_node *__a2b_bus_next_node(struct a2b_node *node)
 {
 	struct a2b_bus *bus = node->bus;
@@ -476,13 +486,17 @@ static int a2b_bus_of_add_node(struct a2b_bus *bus, struct device_node *np,
 	node->bus = bus;
 	node->addr = addr;
 
-	/*
-	 * Register the node device. Note that due to asynchronous probing,
-	 * there is no guarantee that the node driver's probe function has been
-	 * called just yet. The synchronization point is a2b_register_node(),
-	 * which should be called unconditionally by node drivers.
-	 */
-	ret = device_register(&node->dev);
+	device_initialize(&node->dev);
+
+	if (is_a2b_sub(node)) {
+		struct a2b_node *prev = __a2b_bus_prev_node(node);
+
+		if (!device_link_add(&node->dev, &prev->dev,
+				     DL_FLAG_AUTOREMOVE_CONSUMER))
+			dev_warn(&node->dev, "failed to add device link\n");
+	}
+
+	ret = device_add(&node->dev);
 	if (ret)
 		goto err_put_device;
 
@@ -514,39 +528,33 @@ static struct device_node *a2b_bus_of_get_node_of_node(struct a2b_bus *bus,
 	return found ? np : NULL;
 }
 
-static void a2b_bus_event_discovery_done(struct a2b_bus *bus)
+static void a2b_bus_event_enumeration_done(struct a2b_bus *bus)
 {
-	struct a2b_bus_event_data data = { };
-	bool done;
-
 	mutex_lock(&bus->mutex);
-	done = test_and_clear_bit(A2B_BUS_STATUS_DISCOVERY, &bus->status);
-	data.discovery_done.num_nodes = __a2b_bus_num_nodes(bus);
+
+	if (test_and_clear_bit(A2B_BUS_STATUS_ENUMERATION, &bus->status))
+		dev_info(&bus->dev, "discovered %d subordinate nodes\n",
+			 __a2b_bus_num_subs(bus));
+
 	mutex_unlock(&bus->mutex);
-
-	if (!done)
-		return;
-
-	dev_info(&bus->dev, "discovered %d subordinate nodes\n",
-		 data.discovery_done.num_nodes - 1);
-	blocking_notifier_call_chain(&bus->notifier,
-				     A2B_BUS_EVENT_DISCOVERY_DONE, &data);
 }
 
-static void a2b_bus_discovery_work(struct work_struct *work)
+static void a2b_bus_enumeration_work(struct work_struct *work)
 {
-	struct delayed_work *discovery_work = to_delayed_work(work);
+	struct delayed_work *enumeration_work = to_delayed_work(work);
 	struct device_node *np = NULL;
-	struct a2b_bus *bus =
-		container_of(discovery_work, struct a2b_bus, discovery_work);
+	struct a2b_bus *bus = container_of(enumeration_work, struct a2b_bus,
+					   enumeration_work);
 	struct a2b_node *main;
 	struct a2b_node *last;
-	struct a2b_node *node;
 	unsigned int new_addr;
-	int ret;
+	int ret = -ENODEV;
 	int i;
 
 	mutex_lock(&bus->mutex);
+
+	if (bus->killed)
+		goto out;
 
 	main = __a2b_bus_main_node(bus);
 	last = __a2b_bus_last_node(bus);
@@ -558,19 +566,72 @@ static void a2b_bus_discovery_work(struct work_struct *work)
 	if (!(last->chip_info->caps & A2B_CHIP_CAP_B_SIDE))
 		goto out;
 
+	np = a2b_bus_of_get_node_of_node(bus, new_addr);
+
+out:
+	mutex_unlock(&bus->mutex);
+
+	if (np) {
+		ret = a2b_bus_of_add_node(bus, np, new_addr);
+		of_node_put(np);
+		if (ret)
+			dev_err(&bus->dev, "failed to add new node %d: %d\n", i,
+				ret);
+	}
+
+	/*
+	 * If device registration failed or there is no new node after this
+	 * discovery, then the enumeration process is finished. Signal the
+	 * event.
+	 */
+	if (ret)
+		a2b_bus_event_enumeration_done(bus);
+
+	return;
+}
+
+static void a2b_bus_enumerate(struct a2b_bus *bus, unsigned int delay_msecs)
+{
+	mutex_lock(&bus->mutex);
+
+	if (!bus->killed)
+		schedule_delayed_work(&bus->enumeration_work,
+				      msecs_to_jiffies(delay_msecs));
+
+	mutex_unlock(&bus->mutex);
+}
+
+int a2b_discover_node(struct a2b_node *node)
+{
+	struct a2b_bus *bus = node->bus;
+	struct a2b_node *main;
+	struct a2b_node *last;
+	struct a2b_node *n;
+	int ret;
+	int i;
+
+	mutex_lock(&bus->mutex);
+
+	if (node->discovered) {
+		ret = -EALREADY;
+		goto out;
+	}
+
+	main = __a2b_bus_main_node(bus);
+	last = __a2b_bus_last_node(bus);
+
 	set_bit(A2B_BUS_STATUS_DISCOVERY, &bus->status);
-	set_bit(A2B_BUS_STATUS_DISCOVERING, &bus->status);
 
 	/*
 	 * Enable switching on the last currently discovered node. All preceding
 	 * nodes continue switching and have their External Switch Mode set to 2
 	 * as prescribed in [1] Figure 8-3 "Advanced Discovery Flow".
 	 */
-	__a2b_bus_for_each_node(bus, node, i) {
-		ret = last->ops->set_switching(
-			node, true, node == last ? A2B_SWMODE_0 : A2B_SWMODE_2);
+	__a2b_bus_for_each_node(bus, n, i) {
+		ret = n->ops->set_switching(
+			n, true, n == last ? A2B_SWMODE_0 : A2B_SWMODE_2);
 		if (ret) {
-			dev_err(&last->dev, "failed to enable switching: %d\n",
+			dev_err(&n->dev, "failed to enable switching: %d\n",
 				ret);
 			goto out;
 		}
@@ -584,7 +645,7 @@ static void a2b_bus_discovery_work(struct work_struct *work)
 	__a2b_bus_new_structure(bus);
 
 	/* Begin discovery with the expected RESPCYCS value for the new node */
-	ret = main->ops->discover(main, __a2b_bus_respcycs(bus, new_addr));
+	ret = main->ops->discover(main, __a2b_bus_respcycs(bus, node->addr));
 	if (ret < 0) {
 		dev_err(&bus->dev, "discovery error: %d\n", ret);
 		goto out;
@@ -595,50 +656,34 @@ static void a2b_bus_discovery_work(struct work_struct *work)
 		 * prevent spurious bus errors. All other nodes ought to revert
 		 * to a normal External Switching Mode, cf. [1] Figure 8-32.
 		 */
-		__a2b_bus_for_each_node(bus, node, i)
+		__a2b_bus_for_each_node(bus, n, i)
 		{
-			ret = last->ops->set_switching(node, node != last,
+			ret = n->ops->set_switching(n, n != last,
 						       A2B_SWMODE_0);
 			if (ret) {
-				dev_err(&last->dev,
-					"failed to disable switching: %d\n",
+				dev_err(&n->dev,
+					"failed to configure switching: %d\n",
 					ret);
 				goto out;
 			}
 		}
 
+		ret = -ENODEV;
 		goto out;
+	} else {
+		node->discovered = true;
 	}
-
-	np = a2b_bus_of_get_node_of_node(bus, new_addr);
-	if (!np) {
-		dev_warn(&bus->dev, "missing OF child node for %d\n", i);
-		goto out;
-	}
-
-	ret = a2b_bus_of_add_node(bus, np, new_addr);
-	of_node_put(np);
-	if (ret)
-		dev_err(&bus->dev, "failed to add new node %d: %d\n", i, ret);
 
 out:
-	clear_bit(A2B_BUS_STATUS_DISCOVERING, &bus->status);
+	clear_bit(A2B_BUS_STATUS_DISCOVERY, &bus->status);
 	mutex_unlock(&bus->mutex);
 
-	/*
-	 * If there is no new node after this discovery, then the discovery
-	 * process is finished. Signal the event.
-	 */
-	if (!np || ret)
-		a2b_bus_event_discovery_done(bus);
+	if (ret && ret != -EALREADY)
+		a2b_bus_event_enumeration_done(bus);
 
-	return;
+	return ret;
 }
-
-static void a2b_bus_discover(struct a2b_bus *bus)
-{
-	schedule_delayed_work(&bus->discovery_work, msecs_to_jiffies(100));
-}
+EXPORT_SYMBOL_GPL(a2b_discover_node);
 
 int a2b_register_bus(struct a2b_bus *bus)
 {
@@ -650,9 +695,8 @@ int a2b_register_bus(struct a2b_bus *bus)
 
 	/* Initialize private bus data */
 	mutex_init(&bus->mutex);
-	INIT_DELAYED_WORK(&bus->discovery_work, a2b_bus_discovery_work);
-	BLOCKING_INIT_NOTIFIER_HEAD(&bus->notifier);
-	set_bit(A2B_BUS_STATUS_DISCOVERY, &bus->status);
+	INIT_DELAYED_WORK(&bus->enumeration_work, a2b_bus_enumeration_work);
+	set_bit(A2B_BUS_STATUS_ENUMERATION, &bus->status);
 	bus->id = ida_alloc(&a2b_ida, GFP_KERNEL);
 	if (bus->id < 0)
 		return -ENOMEM;
@@ -693,7 +737,12 @@ EXPORT_SYMBOL_GPL(a2b_register_bus);
 
 void a2b_unregister_bus(struct a2b_bus *bus)
 {
-	cancel_delayed_work_sync(&bus->discovery_work);
+	/* Mark the bus inactive to quiesce (re)enumeration work */
+	mutex_lock(&bus->mutex);
+	bus->killed = true;
+	mutex_unlock(&bus->mutex);
+
+	cancel_delayed_work_sync(&bus->enumeration_work);
 
 	a2b_bus_del_nodes(bus);
 
@@ -714,18 +763,6 @@ void a2b_put_bus(struct a2b_bus *bus)
 	put_device(&bus->dev);
 }
 EXPORT_SYMBOL_GPL(a2b_put_bus);
-
-int a2b_bus_register_notifier(struct a2b_bus *bus, struct notifier_block *nb)
-{
-	return blocking_notifier_chain_register(&bus->notifier, nb);
-}
-EXPORT_SYMBOL_GPL(a2b_bus_register_notifier);
-
-int a2b_bus_unregister_notifier(struct a2b_bus *bus, struct notifier_block *nb)
-{
-	return blocking_notifier_chain_unregister(&bus->notifier, nb);
-}
-EXPORT_SYMBOL_GPL(a2b_bus_unregister_notifier);
 
 /**
  * A2B NODE
@@ -776,10 +813,8 @@ struct clk *a2b_node_get_sync_clk(struct a2b_node *node)
 }
 EXPORT_SYMBOL_GPL(a2b_node_get_sync_clk);
 
-static void a2b_node_bus_drop_work(struct work_struct *work)
+static void a2b_node_handle_bus_drop(struct a2b_node *node)
 {
-	struct a2b_node *node =
-		container_of(work, struct a2b_node, bus_drop_work);
 	struct a2b_bus *bus = node->bus;
 	unsigned int nodes_deleted;
 	int ret;
@@ -792,10 +827,9 @@ static void a2b_node_bus_drop_work(struct work_struct *work)
 	/* Delete the nodes that have left the bus */
 	nodes_deleted = a2b_bus_del_nodes_until(bus, node->addr + 1);
 
-	/* Schedule a rediscovery attempt of any lost nodes */
+	/* Schedule a reenumeration attempt of any lost nodes */
 	if (nodes_deleted)
-		schedule_delayed_work(&bus->discovery_work,
-				      msecs_to_jiffies(1000));
+		a2b_bus_enumerate(bus, 1000);
 }
 
 void a2b_node_report_error(struct a2b_node *node, enum a2b_error error)
@@ -807,10 +841,10 @@ void a2b_node_report_error(struct a2b_node *node, enum a2b_error error)
 	 * following errors can be observed during discovery: CRCERR, SRFERR,
 	 * SRFCRCERR. Additionally a PWRERR_3 has been observed in practice when
 	 * enabling switching on a node whose B-Side is not connected. The
-	 * DISCOVERING status bit covers these cases - don't bother warning
-	 * about them.
+	 * DISCOVERY status bit covers these cases - don't bother warning about
+	 * them.
 	 */
-	if (test_bit(A2B_BUS_STATUS_DISCOVERING, &bus->status)) {
+	if (test_bit(A2B_BUS_STATUS_DISCOVERY, &bus->status)) {
 		switch (error) {
 		case A2B_CRCERR:
 		case A2B_SRFERR:
@@ -845,7 +879,7 @@ void a2b_node_report_error(struct a2b_node *node, enum a2b_error error)
 		}
 
 		if (last)
-			schedule_work(&node->bus_drop_work);
+			a2b_node_handle_bus_drop(node);
 
 		return;
 	}
@@ -947,12 +981,10 @@ int a2b_register_node(struct a2b_node *node)
 		return ret;
 	else if (ret) {
 		dev_err(&node->dev, "failed to setup node: %d\n", ret);
-		goto err_discovery_done;
+		goto err_enumeration_done;
 	}
 
 	node->setup = true;
-
-	INIT_WORK(&node->bus_drop_work, a2b_node_bus_drop_work);
 
 	/* The node is now ready and can be used by other parts of the core */
 	mutex_lock(&bus->mutex);
@@ -977,12 +1009,12 @@ int a2b_register_node(struct a2b_node *node)
 				"failed to apply new structure: %d\n", ret);
 	}
 
-	a2b_bus_discover(node->bus);
+	a2b_bus_enumerate(node->bus, 100);
 
 	return 0;
 
-err_discovery_done:
-	a2b_bus_event_discovery_done(bus);
+err_enumeration_done:
+	a2b_bus_event_enumeration_done(bus);
 
 	return ret;
 }
@@ -1002,8 +1034,6 @@ void a2b_unregister_node(struct a2b_node *node)
 	mutex_lock(&bus->mutex);
 	bus->nodes[node->addr] = NULL;
 	mutex_unlock(&bus->mutex);
-
-	cancel_work_sync(&node->bus_drop_work);
 
 	if (node->ops->teardown)
 		node->ops->teardown(node);
@@ -1081,7 +1111,7 @@ static ssize_t discover_store(struct device *dev, struct device_attribute *attr,
 {
 	struct a2b_bus *bus = to_a2b_bus(dev);
 
-	a2b_bus_discover(bus);
+	a2b_bus_enumerate(bus, 0);
 
 	return count;
 }
