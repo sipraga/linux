@@ -787,8 +787,13 @@ EXPORT_SYMBOL_GPL(a2b_node_write);
 int a2b_node_i2c_xfer(struct a2b_node *node, struct i2c_msg *msgs, int num)
 {
 	struct a2b_bus *bus = node->bus;
+	int ret;
 
-	return bus->ops->i2c_xfer(bus, node, msgs, num);
+	mutex_lock(&bus->mutex);
+	ret = bus->ops->i2c_xfer(bus, node, msgs, num);
+	mutex_unlock(&bus->mutex);
+
+	return ret;
 }
 EXPORT_SYMBOL_GPL(a2b_node_i2c_xfer);
 
