@@ -28,6 +28,20 @@ enum ad24xx_chips {
 
 extern const struct a2b_chip_info ad24xx_chip_info[];
 
+struct ad24xx_node {
+	struct device *dev;
+	struct a2b_node *node;
+	struct regmap *regmap;
+	struct irq_domain *irqdomain;
+	int irq;
+	struct completion running_completion;
+	struct completion discovery_completion;
+	struct a2b_func *func_gpio;
+	struct a2b_func *func_codec;
+	struct a2b_func *func_i2c;
+	struct a2b_func *func_clk;
+};
+
 int ad24xx_node_set_respcycs(struct a2b_node *node, unsigned int respcycs);
 int ad24xx_node_set_switching(struct a2b_node *node, bool enable,
 			      enum a2b_swmode mode);

@@ -22,20 +22,6 @@
 #include <linux/regmap.h>
 #include "ad24xx-node.h"
 
-struct ad24xx_node {
-	struct device *dev;
-	struct a2b_node *node;
-	struct regmap *regmap;
-	struct irq_domain *irqdomain;
-	int irq;
-	struct completion running_completion;
-	struct completion discovery_completion;
-	struct a2b_func *func_gpio;
-	struct a2b_func *func_codec;
-	struct a2b_func *func_i2c;
-	struct a2b_func *func_clk;
-};
-
 #define A2B_CHIP_CAPS_AD242X                                      \
 	(A2B_CHIP_CAP_REDUCED_RATE | A2B_CHIP_CAP_CLKOUT |        \
 	 A2B_CHIP_CAP_BUS_MONITOR | A2B_CHIP_CAP_SUSTAIN |        \
@@ -539,14 +525,11 @@ int ad24xx_node_setup(struct a2b_node *node)
 {
 	struct device *dev = &node->dev;
 	struct device_node *np = dev->of_node;
-	struct ad24xx_node *adn;
+	struct ad24xx_node *adn = node->priv;
 	long timeout;
 	int ret;
 
-	adn = devm_kzalloc(dev, sizeof(*adn), GFP_KERNEL);
-	if (!adn)
-		return -ENOMEM;
-
+	/* TODO: Coalesce the initialization of driver private data */
 	adn->regmap =
 		devm_regmap_init_a2b_node(node, &ad24xx_node_regmap_config);
 	if (IS_ERR(adn->regmap))
@@ -570,8 +553,6 @@ int ad24xx_node_setup(struct a2b_node *node)
 		node->rx_on_dtx1 = 1;
 	if (of_property_present(np, "adi,a2b-external-switch-mode-1"))
 		node->swmode_1 = 1;
-
-	node->priv = adn;
 
 	adn->dev = dev;
 	adn->node = node;
@@ -800,8 +781,14 @@ static struct a2b_node_ops ad24xx_main_ops = {
 static int ad24xx_node_probe(struct device *dev)
 {
 	struct a2b_node *node = to_a2b_node(dev);
+	struct ad24xx_node *adn;
 	int ret;
 
+	adn = devm_kzalloc(dev, sizeof(*adn), GFP_KERNEL);
+	if (!adn)
+		return -ENOMEM;
+
+	node->priv = adn;
 	node->ops = is_a2b_main(node) ? &ad24xx_main_ops : &ad24xx_sub_ops;
 	node->chip_info = of_device_get_match_data(dev);
 

@@ -500,11 +500,17 @@ static struct a2b_node_ops beo_shape_node_ops = {
 static int beo_shape_node_probe(struct device *dev)
 {
 	struct a2b_node *node = to_a2b_node(dev);
+	struct ad24xx_node *adn;
 	int ret;
 
 	if (is_a2b_main(node))
 		return -EINVAL;
 
+	adn = devm_kzalloc(dev, sizeof(*adn), GFP_KERNEL);
+	if (!adn)
+		return -ENOMEM;
+
+	node->priv = adn;
 	node->ops = &beo_shape_node_ops;
 	node->chip_info = of_device_get_match_data(dev);
 
