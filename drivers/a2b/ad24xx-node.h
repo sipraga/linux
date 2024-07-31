@@ -10,6 +10,7 @@
 #define _AD24XX_NODE_H_
 
 #include <linux/a2b/a2b.h>
+#include <linux/mux/consumer.h>
 
 enum ad24xx_chips {
 	A2B_AD2401,
@@ -33,6 +34,7 @@ struct ad24xx_node {
 	struct a2b_node *node;
 	struct regmap *regmap;
 	struct irq_domain *irqdomain;
+	struct mux_state *mux_state;
 	int irq;
 	struct completion running_completion;
 	struct completion discovery_completion;

@@ -793,6 +793,18 @@ static int ad24xx_node_probe(struct device *dev)
 	node->chip_info = of_device_get_match_data(dev);
 
 	if (is_a2b_sub(node)) {
+		if (of_property_present(dev->of_node, "mux-states")) {
+			adn->mux_state = devm_mux_state_get(dev, NULL);
+			if (IS_ERR(adn->mux_state))
+				return PTR_ERR(adn->mux_state);
+
+			if (adn->mux_state) {
+				ret = mux_state_select(adn->mux_state);
+				if (ret)
+					return ret;
+			}
+		}
+
 		ret = a2b_discover_node(node);
 		if (ret)
 			return ret;
@@ -808,8 +820,12 @@ static int ad24xx_node_probe(struct device *dev)
 static void ad24xx_node_remove(struct device *dev)
 {
 	struct a2b_node *node = to_a2b_node(dev);
+	struct ad24xx_node *adn = node->priv;
 
 	a2b_unregister_node(node);
+
+	if (adn->mux_state)
+		mux_state_deselect(adn->mux_state);
 }
 
 static const struct of_device_id ad24xx_node_of_match_table[] = {
