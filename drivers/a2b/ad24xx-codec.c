@@ -15,6 +15,8 @@
 #include <linux/bitfield.h>
 #include <linux/module.h>
 #include <linux/regmap.h>
+#include <sound/pcm_params.h>
+#include <sound/soc-component.h>
 #include <sound/soc.h>
 
 #define AD24XX_FORMATS_16 (SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_U16_LE)
@@ -36,233 +38,10 @@ struct ad24xx_codec {
 	struct a2b_node *node;
 	struct regmap *regmap;
 	struct snd_soc_dai_driver *dai_drv;
-	struct a2b_slot_config slot_config;
 	unsigned int active_substreams;
+	enum a2b_slot_size min_slot_size;
+	bool report_slots;
 };
-
-static const char *const ad24xx_codec_slot_format_text[] = {
-	"Normal Slot Format",
-	"Alternate Slot Format",
-};
-
-static const char *const ad24xx_codec_slot_size_text[] = {
-	"8 bits",  "12 bits", "16 bits", "20 bits",
-	"24 bits", "28 bits", "32 bits",
-};
-
-static SOC_ENUM_SINGLE_VIRT_DECL(ad24xx_codec_dn_slot_size_enum,
-				 ad24xx_codec_slot_size_text);
-static SOC_ENUM_SINGLE_VIRT_DECL(ad24xx_codec_dn_slot_format_enum,
-				 ad24xx_codec_slot_format_text);
-static SOC_ENUM_SINGLE_VIRT_DECL(ad24xx_codec_up_slot_size_enum,
-				 ad24xx_codec_slot_size_text);
-static SOC_ENUM_SINGLE_VIRT_DECL(ad24xx_codec_up_slot_format_enum,
-				 ad24xx_codec_slot_format_text);
-
-static int ad24xx_codec_slot_config_get(struct snd_kcontrol *kcontrol,
-					struct snd_ctl_elem_value *ucontrol)
-{
-	struct snd_soc_component *component =
-		snd_soc_kcontrol_component(kcontrol);
-	struct ad24xx_codec *adc = snd_soc_component_get_drvdata(component);
-	struct a2b_slot_config *slot_config = &adc->slot_config;
-	const struct soc_enum *priv = (void *)kcontrol->private_value;
-	unsigned int *val = &ucontrol->value.enumerated.item[0];
-
-	if (priv == &ad24xx_codec_dn_slot_size_enum)
-		*val = slot_config->size[A2B_DIR_DOWN];
-	else if (priv == &ad24xx_codec_dn_slot_format_enum)
-		*val = slot_config->format[A2B_DIR_DOWN];
-	else if (priv == &ad24xx_codec_up_slot_size_enum)
-		*val = slot_config->size[A2B_DIR_UP];
-	else if (priv == &ad24xx_codec_up_slot_format_enum)
-		*val = slot_config->format[A2B_DIR_UP];
-	else
-		return -ENOENT;
-
-	return 0;
-}
-
-static int ad24xx_codec_slot_config_put(struct snd_kcontrol *kcontrol,
-					struct snd_ctl_elem_value *ucontrol)
-{
-	struct snd_soc_component *component =
-		snd_soc_kcontrol_component(kcontrol);
-	struct ad24xx_codec *adc = snd_soc_component_get_drvdata(component);
-	struct a2b_slot_config *slot_config = &adc->slot_config;
-	const struct soc_enum *priv = (void *)kcontrol->private_value;
-	unsigned int val = ucontrol->value.enumerated.item[0];
-	enum a2b_direction direction =
-		(priv == &ad24xx_codec_up_slot_size_enum ||
-		 priv == &ad24xx_codec_up_slot_format_enum) ?
-			A2B_DIR_UP :
-			A2B_DIR_DOWN;
-
-	if (priv == &ad24xx_codec_up_slot_size_enum ||
-	    priv == &ad24xx_codec_dn_slot_size_enum) {
-		if (val >= ARRAY_SIZE(ad24xx_codec_slot_size_text))
-			return -EINVAL;
-		slot_config->size[direction] = val;
-	} else if (priv == &ad24xx_codec_up_slot_format_enum ||
-		   priv == &ad24xx_codec_dn_slot_format_enum) {
-		if (val >= ARRAY_SIZE(ad24xx_codec_slot_format_text))
-			return -EINVAL;
-		slot_config->format[direction] = val;
-	} else
-		return -ENOENT;
-
-	return 0;
-}
-
-static const struct snd_kcontrol_new ad24xx_codec_controls_main[] = {
-	SOC_SINGLE("Downstream Slots", A2B_DNSLOTS, 0, 32, 0),
-	SOC_SINGLE("Upstream Slots", A2B_UPSLOTS, 0, 32, 0),
-	SOC_ENUM_EXT("Downstream Slot Size", ad24xx_codec_dn_slot_size_enum,
-		     ad24xx_codec_slot_config_get,
-		     ad24xx_codec_slot_config_put),
-	SOC_ENUM_EXT("Downstream Slot Format", ad24xx_codec_dn_slot_format_enum,
-		     ad24xx_codec_slot_config_get,
-		     ad24xx_codec_slot_config_put),
-	SOC_ENUM_EXT("Upstream Slot Size", ad24xx_codec_up_slot_size_enum,
-		     ad24xx_codec_slot_config_get,
-		     ad24xx_codec_slot_config_put),
-	SOC_ENUM_EXT("Upstream Slot Format", ad24xx_codec_up_slot_format_enum,
-		     ad24xx_codec_slot_config_get,
-		     ad24xx_codec_slot_config_put),
-};
-
-static const struct snd_kcontrol_new ad24xx_codec_controls_sub[] = {
-	SOC_SINGLE("Broadcast Downstream Slots", A2B_BCDNSLOTS, 0, 32, 0),
-	SOC_SINGLE("Downstream Slots Targeted", A2B_LDNSLOTS, 0, 32, 0),
-	SOC_SINGLE("Upstream Slots Generated", A2B_LUPSLOTS, 0, 32, 0),
-	SOC_SINGLE("Downstream Slots", A2B_DNSLOTS, 0, 32, 0),
-	SOC_SINGLE("Upstream Slots", A2B_UPSLOTS, 0, 32, 0),
-};
-
-static const struct snd_kcontrol_new ad24xx_codec_controls_data_rx_mask[] = {
-	SOC_SINGLE("Downstream Broadcast Mask Enable", A2B_LDNSLOTS, 7, 1, 0),
-	SND_SOC_BYTES("Upstream Data RX Mask", A2B_UPMASK0, 4),
-	SOC_SINGLE("Local Upstream Channel Offset", A2B_UPOFFSET, 0, 31, 0),
-	SND_SOC_BYTES("Downstream Data RX Mask", A2B_DNMASK0, 4),
-	SOC_SINGLE("Local Downstream Channel Offset", A2B_DNOFFSET, 0, 31, 0),
-};
-
-#define SND_SOC_DAPM_ENCODER(wname, stname, wreg, wshift, winvert) \
-{	.id = snd_soc_dapm_encoder, .name = wname, .sname = stname, \
-	SND_SOC_DAPM_INIT_REG_VAL(wreg, wshift, winvert), }
-
-#define SND_SOC_DAPM_DECODER(wname, stname, wreg, wshift, winvert) \
-{	.id = snd_soc_dapm_decoder, .name = wname, .sname = stname, \
-	SND_SOC_DAPM_INIT_REG_VAL(wreg, wshift, winvert), }
-
-static const struct snd_soc_dapm_widget ad24xx_codec_dapm_widgets[] = {
-	/* TODO: Put "I2S Playback"/"Capture" as stream name? */
-	SND_SOC_DAPM_AIF_IN("RX0", NULL, 0, A2B_I2SCFG, 4, 0),
-	SND_SOC_DAPM_AIF_IN("RX1", NULL, 0, A2B_I2SCFG, 5, 0),
-	SND_SOC_DAPM_AIF_OUT("TX0", NULL, 0, A2B_I2SCFG, 0, 0),
-	SND_SOC_DAPM_AIF_OUT("TX1", NULL, 0, A2B_I2SCFG, 1, 0),
-	SND_SOC_DAPM_ENCODER("ENC", NULL, SND_SOC_NOPM, 0, 0),
-	SND_SOC_DAPM_DECODER("DEC", NULL, SND_SOC_NOPM, 0, 0),
-	SND_SOC_DAPM_AIF_IN("TRXA DN", NULL, 0, SND_SOC_NOPM, 0, 0),
-	SND_SOC_DAPM_AIF_IN("TRXB UP", NULL, 0, SND_SOC_NOPM, 0, 0),
-	SND_SOC_DAPM_AIF_OUT("TRXA UP", NULL, 0, SND_SOC_NOPM, 0, 0),
-	SND_SOC_DAPM_AIF_OUT("TRXB DN", NULL, 0, SND_SOC_NOPM, 0, 0),
-};
-
-static const struct snd_soc_dapm_route ad24xx_codec_dapm_routes_main[] = {
-	{ "DEC", NULL, "TRXA DN" },
-	{ "DEC", NULL, "TRXB UP" },
-	{ "TRXA UP", NULL, "ENC" },
-	{ "TRXB DN", NULL, "ENC" },
-	{ "TRXB DN", NULL, "TRXA DN" },
-	{ "TRXA UP", NULL, "TRXB UP" },
-	{ "I2S Capture", NULL, "DEC" },
-	{ "TX0", NULL, "I2S Capture" },
-	{ "TX1", NULL, "I2S Capture" },
-	{ "I2S Playback", NULL, "RX0" },
-	{ "I2S Playback", NULL, "RX1" },
-	{ "ENC", NULL, "I2S Playback" },
-};
-
-static const struct snd_soc_dapm_route ad24xx_codec_dapm_routes_sub[] = {
-	{ "DEC", NULL, "TRXA DN" },
-	{ "DEC", NULL, "TRXB UP" },
-	{ "TRXA UP", NULL, "ENC" },
-	{ "TRXB DN", NULL, "ENC" },
-	{ "TRXB DN", NULL, "TRXA DN" },
-	{ "TRXA UP", NULL, "TRXB UP" },
-	{ "ENC", NULL, "I2S Capture" },
-	{ "I2S Capture", NULL, "RX0" },
-	{ "I2S Capture", NULL, "RX1" },
-	{ "TX0", NULL, "I2S Playback" },
-	{ "TX1", NULL, "I2S Playback" },
-	{ "I2S Playback", NULL, "DEC" },
-};
-
-static int ad24xx_codec_set_fmt(struct snd_soc_dai *dai, unsigned int fmt)
-{
-	struct snd_soc_component *component = dai->component;
-	struct ad24xx_codec *adc = snd_soc_component_get_drvdata(component);
-	bool bclk_invert;
-	unsigned int val;
-	int ret;
-
-	/* Main node must be BCLK/FSYNC consumer, subordinate node provider */
-	if ((fmt & SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK) !=
-	    (is_a2b_main(adc->node) ? SND_SOC_DAIFMT_CBC_CFC :
-				      SND_SOC_DAIFMT_CBP_CFP))
-		return -EINVAL;
-
-	switch (fmt & SND_SOC_DAIFMT_INV_MASK) {
-	case SND_SOC_DAIFMT_NB_NF:
-		if (adc->node->invert_sync)
-			return -EINVAL;
-		bclk_invert = false;
-		break;
-	case SND_SOC_DAIFMT_NB_IF:
-		if (!adc->node->invert_sync)
-			return -EINVAL;
-		bclk_invert = false;
-		break;
-	case SND_SOC_DAIFMT_IB_NF:
-		if (adc->node->invert_sync)
-			return -EINVAL;
-		bclk_invert = true;
-		break;
-	case SND_SOC_DAIFMT_IB_IF:
-		if (!adc->node->invert_sync)
-			return -EINVAL;
-		bclk_invert = true;
-		break;
-	}
-
-	switch (fmt & SND_SOC_DAIFMT_FORMAT_MASK) {
-	case SND_SOC_DAIFMT_I2S:
-		if (!adc->node->alternating_sync || !adc->node->early_sync)
-			return -EINVAL;
-		break;
-	case SND_SOC_DAIFMT_DSP_A:
-		if (adc->node->alternating_sync || !adc->node->early_sync)
-			return -EINVAL;
-		break;
-	case SND_SOC_DAIFMT_DSP_B:
-		if (adc->node->alternating_sync || adc->node->early_sync)
-			return -EINVAL;
-		break;
-	default:
-		return -EINVAL;
-	}
-
-	val = bclk_invert ? A2B_I2SCFG_RXBCLKINV_MASK :
-			    A2B_I2SCFG_TXBCLKINV_MASK;
-	ret = regmap_update_bits(
-		adc->regmap, A2B_I2SCFG,
-		A2B_I2SCFG_TXBCLKINV_MASK | A2B_I2SCFG_RXBCLKINV_MASK, val);
-	if (ret)
-		return ret;
-
-	return 0;
-}
 
 static int ad24xx_codec_calc_a_dnslots(struct ad24xx_codec *adc)
 {
@@ -445,6 +224,119 @@ static unsigned int ad24xx_codec_calc_b_upslots(struct ad24xx_codec *adc)
 	return max(upslots, upmaskrx);
 }
 
+static void ad24xx_codec_report_slots(struct ad24xx_codec *adc)
+{
+	struct a2b_node_slots slots = {
+		.a_dnslots = ad24xx_codec_calc_a_dnslots(adc),
+		.a_upslots = ad24xx_codec_calc_a_upslots(adc),
+		.b_dnslots = ad24xx_codec_calc_b_dnslots(adc),
+		.b_upslots = ad24xx_codec_calc_b_upslots(adc),
+		/*
+		 * The Playback (resp. Capture) stream can consist of
+		 * both upstream and downstream slots, so request the
+		 * same slot size for both upstream and downstream A2B
+		 * data. On the ASoC side, DAI symmetry ensures that
+		 * substreams have the same sample bits. Alternate slot
+		 * format is not supported.
+		 */
+		.size_dn = adc->min_slot_size,
+		.size_up = adc->min_slot_size,
+		.format_dn = A2B_SLOT_FORMAT_NORMAL,
+		.format_up = A2B_SLOT_FORMAT_NORMAL,
+	};
+
+	/*
+	 * Report this new slot configuration and apply the structure. Structure
+	 * validation can cause the latter step to fail, in which case the call
+	 * will return an error code. The error is ignored for several reasons:
+	 *
+	 *   - the slot configuration is programmed non-atomically through DAPM,
+	 *     so this node's configuration might not yet be valid on this pass
+	 *     of the DAPM sequence
+	 *
+	 *   - structure validity is a function of all nodes' slot
+	 *     configurations, and the other nodes might not have reported their
+	 *     final configuration yet
+	 *
+	 *   - the ASoC codepath through which this function is called means
+	 *     that a non-zero return code will be ignored anyway
+	 *
+	 * Instead, the assumption made here is that all quiescent states of the
+	 * sound card will yield a valid structure. If that is the case,
+	 * eventually the structure will be applied.
+	 *
+	 * This gratuitous application of a new structure also permits
+	 * reconfiguration of the slots (via kcontrols) while the sound card is
+	 * open and data is flowing.
+	 */
+	a2b_node_report_slots(adc->node, &slots);
+}
+
+static int ad24xx_codec_set_fmt(struct snd_soc_dai *dai, unsigned int fmt)
+{
+	struct snd_soc_component *component = dai->component;
+	struct ad24xx_codec *adc = snd_soc_component_get_drvdata(component);
+	bool bclk_invert;
+	unsigned int val;
+	int ret;
+
+	/* Main node must be BCLK/FSYNC consumer, subordinate node provider */
+	if ((fmt & SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK) !=
+	    (is_a2b_main(adc->node) ? SND_SOC_DAIFMT_CBC_CFC :
+				      SND_SOC_DAIFMT_CBP_CFP))
+		return -EINVAL;
+
+	switch (fmt & SND_SOC_DAIFMT_INV_MASK) {
+	case SND_SOC_DAIFMT_NB_NF:
+		if (adc->node->invert_sync)
+			return -EINVAL;
+		bclk_invert = false;
+		break;
+	case SND_SOC_DAIFMT_NB_IF:
+		if (!adc->node->invert_sync)
+			return -EINVAL;
+		bclk_invert = false;
+		break;
+	case SND_SOC_DAIFMT_IB_NF:
+		if (adc->node->invert_sync)
+			return -EINVAL;
+		bclk_invert = true;
+		break;
+	case SND_SOC_DAIFMT_IB_IF:
+		if (!adc->node->invert_sync)
+			return -EINVAL;
+		bclk_invert = true;
+		break;
+	}
+
+	switch (fmt & SND_SOC_DAIFMT_FORMAT_MASK) {
+	case SND_SOC_DAIFMT_I2S:
+		if (!adc->node->alternating_sync || !adc->node->early_sync)
+			return -EINVAL;
+		break;
+	case SND_SOC_DAIFMT_DSP_A:
+		if (adc->node->alternating_sync || !adc->node->early_sync)
+			return -EINVAL;
+		break;
+	case SND_SOC_DAIFMT_DSP_B:
+		if (adc->node->alternating_sync || adc->node->early_sync)
+			return -EINVAL;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	val = bclk_invert ? A2B_I2SCFG_RXBCLKINV_MASK :
+			    A2B_I2SCFG_TXBCLKINV_MASK;
+	ret = regmap_update_bits(
+		adc->regmap, A2B_I2SCFG,
+		A2B_I2SCFG_TXBCLKINV_MASK | A2B_I2SCFG_RXBCLKINV_MASK, val);
+	if (ret)
+		return ret;
+
+	return 0;
+}
+
 static int ad24xx_codec_hw_params(struct snd_pcm_substream *substream,
 				  struct snd_pcm_hw_params *params,
 				  struct snd_soc_dai *dai)
@@ -452,13 +344,6 @@ static int ad24xx_codec_hw_params(struct snd_pcm_substream *substream,
 	struct snd_soc_component *component = dai->component;
 	struct ad24xx_codec *adc = snd_soc_component_get_drvdata(component);
 	unsigned int rate = params_rate(params);
-	struct a2b_slot_req slot_req = {
-		.a_dnslots = ad24xx_codec_calc_a_dnslots(adc),
-		.a_upslots = ad24xx_codec_calc_a_upslots(adc),
-		.b_dnslots = ad24xx_codec_calc_b_dnslots(adc),
-		.b_upslots = ad24xx_codec_calc_b_upslots(adc),
-		.slot_config = adc->slot_config, /* ignored for subordinates */
-	};
 	int ret;
 
 	/* Configure I2S/TDM rate */
@@ -499,13 +384,38 @@ static int ad24xx_codec_hw_params(struct snd_pcm_substream *substream,
 			return ret;
 	}
 
-
-	/* Finally, request slots */
+	/* Report the minimum A2B slot size needed to support these hw_params */
 	if (!adc->active_substreams) {
-		ret = a2b_node_request_slots(adc->node, &slot_req);
-		if (ret)
-			return ret;
+		enum a2b_slot_size slot_size;
 
+		switch (snd_pcm_format_width(params_format(params))) {
+		case 8:
+			slot_size = A2B_SLOT_SIZE_8;
+			break;
+		case 12:
+			slot_size = A2B_SLOT_SIZE_12;
+			break;
+		case 16:
+			slot_size = A2B_SLOT_SIZE_16;
+			break;
+		case 20:
+			slot_size = A2B_SLOT_SIZE_20;
+			break;
+		case 24:
+			slot_size = A2B_SLOT_SIZE_24;
+			break;
+		case 28:
+			slot_size = A2B_SLOT_SIZE_28;
+			break;
+		case 32:
+			slot_size = A2B_SLOT_SIZE_32;
+			break;
+		default:
+			return -EINVAL;
+		}
+
+		adc->min_slot_size = slot_size;
+		adc->report_slots = true;
 		adc->active_substreams |= BIT(substream->stream);
 	}
 
@@ -517,14 +427,12 @@ static int ad24xx_codec_hw_free(struct snd_pcm_substream *substream,
 {
 	struct snd_soc_component *component = dai->component;
 	struct ad24xx_codec *adc = snd_soc_component_get_drvdata(component);
-	int ret;
 
 	adc->active_substreams &= ~BIT(substream->stream);
 
 	if (!adc->active_substreams) {
-		ret = a2b_node_free_slots(adc->node);
-		if (ret)
-			return ret;
+		adc->min_slot_size = 0;
+		adc->report_slots = true;
 	}
 
 	return 0;
@@ -555,8 +463,232 @@ static const struct snd_soc_dai_driver ad24xx_codec_dai_drv[] = {
 		},
 		.ops = &ad24xx_codec_dai_ops,
 		.symmetric_rate = 1,
+		.symmetric_sample_bits = 1,
 	},
 };
+
+static int ad24xx_codec_put_slots(struct snd_kcontrol *kcontrol,
+				  struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_dapm_context *dapm =
+		snd_soc_dapm_kcontrol_dapm(kcontrol);
+	struct snd_soc_component *component = snd_soc_dapm_to_component(dapm);
+	struct ad24xx_codec *adc = snd_soc_component_get_drvdata(component);
+	struct soc_mixer_control *mc =
+		(struct soc_mixer_control *)kcontrol->private_value;
+	unsigned int mask = (1 << fls(mc->max)) - 1;
+	unsigned int val = ucontrol->value.integer.value[0] & mask;
+
+	if (val == dapm_kcontrol_get_value(kcontrol))
+		return 0;
+
+	/*
+	 * The slots are being reconfigured. Set this flag to trigger a new slot
+	 * report. This allows the structure to be changed at runtime when there
+	 * are active substreams.
+	 */
+	adc->report_slots = true;
+
+	return snd_soc_dapm_put_volsw(kcontrol, ucontrol);
+}
+
+/*
+ * Autodisabled kcontrol macro for slot configuration register fields. It is
+ * essentially the same as SOC_DAPM_SINGLE_AUTODISABLE, but with a custom put
+ * function that triggers a slot report when the value is changed.
+ */
+#define A2B_DAPM_SLOT_SINGLE(xname, reg, shift, max) \
+	{ .iface = SNDRV_CTL_ELEM_IFACE_MIXER,       \
+	  .name = xname,                             \
+	  .info = snd_soc_info_volsw,                \
+	  .get = snd_soc_dapm_get_volsw,             \
+	  .put = ad24xx_codec_put_slots,             \
+	  .private_value = SOC_SINGLE_VALUE(reg, shift, max, 0, 1) }
+
+static const char *const ad24xx_dnmasken_text[] = { "Disabled", "Enabled" };
+static SOC_ENUM_SINGLE_DECL(ad24xx_dnmasken_enum, A2B_LDNSLOTS,
+			    A2B_LDNSLOTS_DNMASKEN_SHIFT, ad24xx_dnmasken_text);
+
+static const struct snd_kcontrol_new ad24xx_dnmasken_kcontrol =
+	SOC_DAPM_ENUM("DNMASKEN", ad24xx_dnmasken_enum);
+
+static const struct snd_kcontrol_new ad24xx_ldnslots_kcontrol =
+	A2B_DAPM_SLOT_SINGLE("LDNSLOTS", A2B_LDNSLOTS, 0, 32);
+
+static const struct snd_kcontrol_new ad24xx_bcdnslots_kcontrol =
+	A2B_DAPM_SLOT_SINGLE("BCDNSLOTS", A2B_BCDNSLOTS, 0, 32);
+
+static const struct snd_kcontrol_new ad24xx_lupslots_kcontrol =
+	A2B_DAPM_SLOT_SINGLE("LUPSLOTS", A2B_LUPSLOTS, 0, 32);
+
+static const struct snd_kcontrol_new ad24xx_dnslots_kcontrol =
+	A2B_DAPM_SLOT_SINGLE("DNSLOTS", A2B_DNSLOTS, 0, 32);
+
+static const struct snd_kcontrol_new ad24xx_upslots_kcontrol =
+	A2B_DAPM_SLOT_SINGLE("UPSLOTS", A2B_UPSLOTS, 0, 32);
+
+static const struct snd_kcontrol_new ad24xx_upmask_kcontrols[] = {
+	A2B_DAPM_SLOT_SINGLE("UPMASK0", A2B_UPMASK0, 0, 0xFF),
+	A2B_DAPM_SLOT_SINGLE("UPMASK1", A2B_UPMASK1, 0, 0xFF),
+	A2B_DAPM_SLOT_SINGLE("UPMASK2", A2B_UPMASK2, 0, 0xFF),
+	A2B_DAPM_SLOT_SINGLE("UPMASK3", A2B_UPMASK3, 0, 0xFF),
+};
+
+static const struct snd_kcontrol_new ad24xx_dnmask_kcontrols[] = {
+	A2B_DAPM_SLOT_SINGLE("DNMASK0", A2B_DNMASK0, 0, 0xFF),
+	A2B_DAPM_SLOT_SINGLE("DNMASK1", A2B_DNMASK1, 0, 0xFF),
+	A2B_DAPM_SLOT_SINGLE("DNMASK2", A2B_DNMASK2, 0, 0xFF),
+	A2B_DAPM_SLOT_SINGLE("DNMASK3", A2B_DNMASK3, 0, 0xFF),
+};
+
+static const struct snd_kcontrol_new ad24xx_codec_controls_data_rx_mask[] = {
+	SOC_SINGLE("UPOFFSET", A2B_UPOFFSET, 0, 31, 0),
+	SOC_SINGLE("DNOFFSET", A2B_DNOFFSET, 0, 31, 0),
+};
+
+static int ad24xx_codec_slot_mixer_event(struct snd_soc_dapm_widget *w,
+					 struct snd_kcontrol *kcontrol,
+					 int event)
+{
+	struct snd_soc_component *component =
+		snd_soc_dapm_to_component(w->dapm);
+	struct ad24xx_codec *adc = snd_soc_component_get_drvdata(component);
+
+	if (event & (SND_SOC_DAPM_WILL_PMU | SND_SOC_DAPM_WILL_PMD))
+		adc->report_slots = true;
+
+	return 0;
+}
+
+/*
+ * Slot mixer control macro. These snd_soc_dapm_mixer_named_ctl widgets will
+ * trigger a new slot report when powering up or down.
+ */
+#define A2B_SOC_DAPM_SLOT_MIXER(wname, wcontrols, wncontrols)     \
+	SND_SOC_DAPM_MIXER_NAMED_CTL_E(                           \
+		wname, SND_SOC_NOPM, 0, 0, wcontrols, wncontrols, \
+		ad24xx_codec_slot_mixer_event,                    \
+		SND_SOC_DAPM_WILL_PMU | SND_SOC_DAPM_WILL_PMD)
+
+static const struct snd_soc_dapm_widget ad24xx_codec_dapm_widgets_main[] = {
+	SND_SOC_DAPM_AIF_IN("RX0", NULL, 0, A2B_I2SCFG, 4, 0),
+	SND_SOC_DAPM_AIF_IN("RX1", NULL, 0, A2B_I2SCFG, 5, 0),
+	SND_SOC_DAPM_AIF_OUT("TX0", NULL, 0, A2B_I2SCFG, 0, 0),
+	SND_SOC_DAPM_AIF_OUT("TX1", NULL, 0, A2B_I2SCFG, 1, 0),
+	SND_SOC_DAPM_AIF_IN("TRXB UP", NULL, 0, SND_SOC_NOPM, 0, 0),
+	SND_SOC_DAPM_AIF_OUT("TRXB DN", NULL, 0, SND_SOC_NOPM, 0, 0),
+	A2B_SOC_DAPM_SLOT_MIXER("DNSLOTS", &ad24xx_dnslots_kcontrol, 1),
+	A2B_SOC_DAPM_SLOT_MIXER("UPSLOTS", &ad24xx_upslots_kcontrol, 1),
+};
+
+#define A2B_SOC_DAPM_BUFFER(wname)   \
+	{ .id = snd_soc_dapm_buffer, \
+	  .name = wname,             \
+	  SND_SOC_DAPM_INIT_REG_VAL(SND_SOC_NOPM, 0, 0) }
+
+static const struct snd_soc_dapm_widget ad24xx_codec_dapm_widgets_sub[] = {
+	SND_SOC_DAPM_AIF_IN("RX0", NULL, 0, A2B_I2SCFG, 4, 0),
+	SND_SOC_DAPM_AIF_IN("RX1", NULL, 0, A2B_I2SCFG, 5, 0),
+	SND_SOC_DAPM_AIF_OUT("TX0", NULL, 0, A2B_I2SCFG, 0, 0),
+	SND_SOC_DAPM_AIF_OUT("TX1", NULL, 0, A2B_I2SCFG, 1, 0),
+	SND_SOC_DAPM_AIF_IN("TRXA DN", NULL, 0, SND_SOC_NOPM, 0, 0),
+	SND_SOC_DAPM_AIF_IN("TRXB UP", NULL, 0, SND_SOC_NOPM, 0, 0),
+	SND_SOC_DAPM_AIF_OUT("TRXA UP", NULL, 0, SND_SOC_NOPM, 0, 0),
+	SND_SOC_DAPM_AIF_OUT("TRXB DN", NULL, 0, SND_SOC_NOPM, 0, 0),
+	SND_SOC_DAPM_MUX("TRXB DN MUX", SND_SOC_NOPM, 0, 0,
+			 &ad24xx_dnmasken_kcontrol),
+	SND_SOC_DAPM_MUX("TX MUX", SND_SOC_NOPM, 0, 0,
+			 &ad24xx_dnmasken_kcontrol),
+	A2B_SOC_DAPM_SLOT_MIXER("LDNSLOTS RX", &ad24xx_ldnslots_kcontrol, 1),
+	A2B_SOC_DAPM_BUFFER("LDNSLOTS RX PRE"),
+	A2B_SOC_DAPM_SLOT_MIXER("LDNSLOTS TX", &ad24xx_ldnslots_kcontrol, 1),
+	A2B_SOC_DAPM_BUFFER("LDNSLOTS TX PRE"),
+	A2B_SOC_DAPM_SLOT_MIXER("BCDNSLOTS", &ad24xx_bcdnslots_kcontrol, 1),
+	A2B_SOC_DAPM_BUFFER("BCDNSLOTS PRE"),
+	A2B_SOC_DAPM_SLOT_MIXER("LUPSLOTS", &ad24xx_lupslots_kcontrol, 1),
+	A2B_SOC_DAPM_BUFFER("LUPSLOTS PRE"),
+	A2B_SOC_DAPM_SLOT_MIXER("DNSLOTS", &ad24xx_dnslots_kcontrol, 1),
+	A2B_SOC_DAPM_BUFFER("DNSLOTS PRE"),
+	A2B_SOC_DAPM_SLOT_MIXER("UPSLOTS", &ad24xx_upslots_kcontrol, 1),
+	A2B_SOC_DAPM_BUFFER("UPSLOTS PRE"),
+	A2B_SOC_DAPM_SLOT_MIXER("UPMASK", ad24xx_upmask_kcontrols, 4),
+	A2B_SOC_DAPM_BUFFER("UPMASK PRE"),
+	A2B_SOC_DAPM_SLOT_MIXER("DNMASK", ad24xx_dnmask_kcontrols, 4),
+	A2B_SOC_DAPM_BUFFER("DNMASK PRE"),
+};
+
+static const struct snd_soc_dapm_route ad24xx_codec_dapm_routes_main[] = {
+	{ "TRXB DN", NULL, "DNSLOTS" },
+	{ "DNSLOTS", "DNSLOTS", "I2S Playback" },
+	{ "I2S Capture", NULL, "UPSLOTS" },
+	{ "UPSLOTS", "UPSLOTS", "TRXB UP" },
+	{ "TX0", NULL, "I2S Capture" },
+	{ "TX1", NULL, "I2S Capture" },
+	{ "I2S Playback", NULL, "RX0" },
+	{ "I2S Playback", NULL, "RX1" },
+};
+
+static const struct snd_soc_dapm_route ad24xx_codec_dapm_routes_sub[] = {
+	{ "LDNSLOTS RX PRE", NULL, "I2S Capture" },
+	{ "LDNSLOTS RX", "LDNSLOTS", "LDNSLOTS RX PRE" },
+	{ "TRXB DN MUX", "Enabled", "LDNSLOTS RX" },
+
+	{ "LDNSLOTS TX PRE", NULL, "TRXA DN" },
+	{ "LDNSLOTS TX", "LDNSLOTS", "LDNSLOTS TX PRE" },
+	{ "TX MUX", "Disabled", "LDNSLOTS TX" },
+
+	{ "BCDNSLOTS PRE", NULL, "TRXA DN" },
+	{ "BCDNSLOTS", "BCDNSLOTS", "BCDNSLOTS PRE" },
+	{ "TRXB DN MUX", "Disabled", "BCDNSLOTS" },
+
+	{ "I2S Playback", NULL, "TX MUX" },
+	{ "TRXB DN", NULL, "TRXB DN MUX" },
+
+	{ "LUPSLOTS PRE", NULL, "I2S Capture" },
+	{ "LUPSLOTS", "LUPSLOTS", "LUPSLOTS PRE" },
+	{ "TRXA UP", NULL, "LUPSLOTS" },
+
+	{ "TRXB DN", NULL, "DNSLOTS" },
+	{ "DNSLOTS", "DNSLOTS", "DNSLOTS PRE" },
+	{ "DNSLOTS PRE", NULL, "TRXA DN" },
+
+	{ "UPSLOTS PRE", NULL, "TRXB UP" },
+	{ "UPSLOTS", "UPSLOTS", "UPSLOTS PRE" },
+	{ "TRXA UP", NULL, "UPSLOTS" },
+
+	{ "UPMASK PRE", NULL, "TRXB UP" },
+	{ "UPMASK", "UPMASK0", "UPMASK PRE" },
+	{ "UPMASK", "UPMASK1", "UPMASK PRE" },
+	{ "UPMASK", "UPMASK2", "UPMASK PRE" },
+	{ "UPMASK", "UPMASK3", "UPMASK PRE" },
+	{ "I2S Playback", NULL, "UPMASK" },
+
+	{ "DNMASK PRE", NULL, "TRXA DN" },
+	{ "DNMASK", "DNMASK0", "DNMASK PRE" },
+	{ "DNMASK", "DNMASK1", "DNMASK PRE" },
+	{ "DNMASK", "DNMASK2", "DNMASK PRE" },
+	{ "DNMASK", "DNMASK3", "DNMASK PRE" },
+	{ "I2S Playback", NULL, "DNMASK" },
+
+	{ "I2S Capture", NULL, "RX0" },
+	{ "I2S Capture", NULL, "RX1" },
+	{ "TX0", NULL, "I2S Playback" },
+	{ "TX1", NULL, "I2S Playback" },
+};
+
+static int
+ad24xx_codec_component_stream_event(struct snd_soc_component *component,
+				    int event)
+{
+	struct ad24xx_codec *adc = snd_soc_component_get_drvdata(component);
+
+	if (adc->report_slots) {
+		adc->report_slots = false;
+		ad24xx_codec_report_slots(adc);
+	}
+
+	return 0;
+}
 
 static int ad24xx_codec_component_probe(struct snd_soc_component *component)
 {
@@ -581,10 +713,9 @@ static int ad24xx_codec_component_probe(struct snd_soc_component *component)
 static const struct snd_soc_component_driver ad24xx_codec_component_drv_main = {
 	.name = "ad24xx-codec",
 	.probe = ad24xx_codec_component_probe,
-	.controls = ad24xx_codec_controls_main,
-	.num_controls = ARRAY_SIZE(ad24xx_codec_controls_main),
-	.dapm_widgets = ad24xx_codec_dapm_widgets,
-	.num_dapm_widgets = ARRAY_SIZE(ad24xx_codec_dapm_widgets),
+	.stream_event = ad24xx_codec_component_stream_event,
+	.dapm_widgets = ad24xx_codec_dapm_widgets_main,
+	.num_dapm_widgets = ARRAY_SIZE(ad24xx_codec_dapm_widgets_main),
 	.dapm_routes = ad24xx_codec_dapm_routes_main,
 	.num_dapm_routes = ARRAY_SIZE(ad24xx_codec_dapm_routes_main),
 	.endianness = 1,
@@ -593,10 +724,9 @@ static const struct snd_soc_component_driver ad24xx_codec_component_drv_main = {
 static const struct snd_soc_component_driver ad24xx_codec_component_drv_sub = {
 	.name = "ad24xx-codec",
 	.probe = ad24xx_codec_component_probe,
-	.controls = ad24xx_codec_controls_sub,
-	.num_controls = ARRAY_SIZE(ad24xx_codec_controls_sub),
-	.dapm_widgets = ad24xx_codec_dapm_widgets,
-	.num_dapm_widgets = ARRAY_SIZE(ad24xx_codec_dapm_widgets),
+	.stream_event = ad24xx_codec_component_stream_event,
+	.dapm_widgets = ad24xx_codec_dapm_widgets_sub,
+	.num_dapm_widgets = ARRAY_SIZE(ad24xx_codec_dapm_widgets_sub),
 	.dapm_routes = ad24xx_codec_dapm_routes_sub,
 	.num_dapm_routes = ARRAY_SIZE(ad24xx_codec_dapm_routes_sub),
 	.endianness = 1,

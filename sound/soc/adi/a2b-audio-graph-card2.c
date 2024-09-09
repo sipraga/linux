@@ -310,8 +310,7 @@ static int a2b_graph_card_late_probe(struct snd_soc_card *card)
 
 	/*
 	 * Connect A2B transceiver widgets together to ensure a coherent DPCM
-	 * topology. This ensures that hw_params will get set on the entire A2B
-	 * chain.
+	 * topology.
 	 */
 	for_each_card_components(card, c1) {
 		if (!c1->driver->name ||

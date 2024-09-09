@@ -49,8 +49,7 @@ int ad24xx_node_set_switching(struct a2b_node *node, bool enable,
 			      enum a2b_swmode mode);
 int ad24xx_node_discover(struct a2b_node *node, unsigned int respcycs);
 int ad24xx_node_new_structure(struct a2b_node *node,
-			      const struct a2b_slot_config *slot_config,
-			      bool dn_enable, bool up_enable);
+			      const struct a2b_structure *structure);
 int ad24xx_node_is_last(struct a2b_node *node);
 int ad24xx_node_setup(struct a2b_node *node);
 void ad24xx_node_teardown(struct a2b_node *node);

@@ -97,11 +97,6 @@ enum a2b_swmode {
 	A2B_SWMODE_2 = 2,
 };
 
-enum a2b_direction {
-	A2B_DIR_UP,
-	A2B_DIR_DOWN,
-};
-
 enum a2b_slot_size {
 	A2B_SLOT_SIZE_8 = 0,
 	A2B_SLOT_SIZE_12 = 1,
@@ -117,17 +112,25 @@ enum a2b_slot_format {
 	A2B_SLOT_FORMAT_ALT = 1,
 };
 
-struct a2b_slot_config {
-	enum a2b_slot_size size[2];
-	enum a2b_slot_format format[2];
-};
-
-struct a2b_slot_req {
+struct a2b_node_slots {
 	unsigned int a_dnslots;
 	unsigned int a_upslots;
 	unsigned int b_dnslots;
 	unsigned int b_upslots;
-	struct a2b_slot_config slot_config;
+	enum a2b_slot_size size_dn;
+	enum a2b_slot_size size_up;
+	enum a2b_slot_format format_dn;
+	enum a2b_slot_format format_up;
+};
+
+struct a2b_structure {
+	enum a2b_slot_size size_dn;
+	enum a2b_slot_size size_up;
+	enum a2b_slot_format format_dn;
+	enum a2b_slot_format format_up;
+	bool enable_dn;
+	bool enable_up;
+	unsigned int main_respcycs;
 };
 
 /**
@@ -191,8 +194,7 @@ struct a2b_node_ops {
 	int (*set_switching)(struct a2b_node *node, bool enable, enum a2b_swmode mode);
 	int (*discover)(struct a2b_node *node, unsigned int respcycs);
 	int (*new_structure)(struct a2b_node *node,
-			     const struct a2b_slot_config *slot_config,
-			     bool dn_enable, bool up_enable);
+			     const struct a2b_structure *structure);
 	int (*is_last)(struct a2b_node *node);
 	int (*setup)(struct a2b_node *node);
 	void (*teardown)(struct a2b_node *node);
@@ -221,8 +223,7 @@ struct a2b_node {
 	bool discovered;
 	struct a2b_bus *bus;
 	unsigned int addr;
-	struct a2b_slot_req slot_req;
-	bool slots_requested;
+	struct a2b_node_slots slots;
 };
 
 static inline bool is_a2b_main(const struct a2b_node *node)
@@ -318,10 +319,8 @@ int a2b_node_get_inttype(struct a2b_node *node, unsigned int *val);
 struct clk *a2b_node_get_sync_clk(struct a2b_node *node);
 
 void a2b_node_report_error(struct a2b_node *node, enum a2b_error error);
-
-int a2b_node_request_slots(struct a2b_node *node,
-			   struct a2b_slot_req *slot_req);
-int a2b_node_free_slots(struct a2b_node *node);
+int a2b_node_report_slots(struct a2b_node *node,
+			  const struct a2b_node_slots *slots);
 
 int a2b_discover_node(struct a2b_node *node);
 int a2b_register_node(struct a2b_node *node);

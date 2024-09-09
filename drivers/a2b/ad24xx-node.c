@@ -406,8 +406,7 @@ int ad24xx_node_discover(struct a2b_node *node, unsigned int respcycs)
 EXPORT_SYMBOL_GPL(ad24xx_node_discover);
 
 int ad24xx_node_new_structure(struct a2b_node *node,
-			      const struct a2b_slot_config *slot_config,
-			      bool dn_enable, bool up_enable)
+			      const struct a2b_structure *structure)
 {
 	struct ad24xx_node *adn = node->priv;
 	unsigned int val;
@@ -419,21 +418,17 @@ int ad24xx_node_new_structure(struct a2b_node *node,
 	 * that the written value is automatically propagated to all downstream
 	 * subordinate nodes.
 	 */
-	val = FIELD_PREP(A2B_SLOTFMT_DNSIZE_MASK,
-			 slot_config->size[A2B_DIR_DOWN]) |
-	      FIELD_PREP(A2B_SLOTFMT_DNFMT_MASK,
-			 slot_config->format[A2B_DIR_DOWN]) |
-	      FIELD_PREP(A2B_SLOTFMT_UPSIZE_MASK,
-			 slot_config->size[A2B_DIR_UP]) |
-	      FIELD_PREP(A2B_SLOTFMT_UPFMT_MASK,
-			 slot_config->format[A2B_DIR_UP]);
+	val = FIELD_PREP(A2B_SLOTFMT_DNSIZE_MASK, structure->size_dn) |
+	      FIELD_PREP(A2B_SLOTFMT_DNFMT_MASK, structure->format_dn) |
+	      FIELD_PREP(A2B_SLOTFMT_UPSIZE_MASK, structure->size_up) |
+	      FIELD_PREP(A2B_SLOTFMT_UPFMT_MASK, structure->format_up);
 
 	ret = regmap_write(adn->regmap, A2B_SLOTFMT, val);
 	if (ret)
 		return ret;
 
-	val = FIELD_PREP(A2B_DATCTL_DNS_MASK, dn_enable) |
-	      FIELD_PREP(A2B_DATCTL_UPS_MASK, up_enable);
+	val = FIELD_PREP(A2B_DATCTL_DNS_MASK, structure->enable_dn) |
+	      FIELD_PREP(A2B_DATCTL_UPS_MASK, structure->enable_up);
 
 	ret = regmap_write(adn->regmap, A2B_DATCTL, val);
 	if (ret)
