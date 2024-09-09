@@ -445,6 +445,7 @@ static int a2b_graph_probe(struct platform_device *pdev)
 	 */
 	card = simple_priv_to_card(simple_priv);
 	card->component_chaining = 1;
+	card->fully_routed = 1;
 
 	/*
 	 * HACK: To allow probing even with fw_devlink=on, purge unwanted device
