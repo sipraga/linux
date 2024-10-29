@@ -276,6 +276,7 @@ static int ad24xx_codec_set_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 {
 	struct snd_soc_component *component = dai->component;
 	struct ad24xx_codec *adc = snd_soc_component_get_drvdata(component);
+	bool fsync_invert;
 	bool bclk_invert;
 	unsigned int val;
 	int ret;
@@ -288,23 +289,19 @@ static int ad24xx_codec_set_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 
 	switch (fmt & SND_SOC_DAIFMT_INV_MASK) {
 	case SND_SOC_DAIFMT_NB_NF:
-		if (adc->node->invert_sync)
-			return -EINVAL;
+		fsync_invert = false;
 		bclk_invert = false;
 		break;
 	case SND_SOC_DAIFMT_NB_IF:
-		if (!adc->node->invert_sync)
-			return -EINVAL;
+		fsync_invert = true;
 		bclk_invert = false;
 		break;
 	case SND_SOC_DAIFMT_IB_NF:
-		if (adc->node->invert_sync)
-			return -EINVAL;
+		fsync_invert = false;
 		bclk_invert = true;
 		break;
 	case SND_SOC_DAIFMT_IB_IF:
-		if (!adc->node->invert_sync)
-			return -EINVAL;
+		fsync_invert = true;
 		bclk_invert = true;
 		break;
 	}
@@ -313,6 +310,10 @@ static int ad24xx_codec_set_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 	case SND_SOC_DAIFMT_I2S:
 		if (!adc->node->alternating_sync || !adc->node->early_sync)
 			return -EINVAL;
+
+		/* Frame starts with falling edge on I2S */
+		fsync_invert = !fsync_invert;
+
 		break;
 	case SND_SOC_DAIFMT_DSP_A:
 		if (adc->node->alternating_sync || !adc->node->early_sync)
@@ -325,6 +326,9 @@ static int ad24xx_codec_set_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 	default:
 		return -EINVAL;
 	}
+
+	if (fsync_invert != adc->node->invert_sync)
+		return -EINVAL;
 
 	val = bclk_invert ? A2B_I2SCFG_RXBCLKINV_MASK :
 			    A2B_I2SCFG_TXBCLKINV_MASK;
