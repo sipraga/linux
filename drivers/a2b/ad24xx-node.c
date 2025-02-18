@@ -290,8 +290,11 @@ static irqreturn_t ad24xx_node_irq_handler(int irq, void *data)
 		/* GPIO IRQ */
 		virq = irq_find_mapping(adn->irqdomain,
 					inttype - A2B_INTTYPE_IO0PND);
-		if (virq)
+		if (virq) {
 			handle_nested_irq(virq);
+			return IRQ_HANDLED;
+		}
+
 		return IRQ_NONE;
 	case A2B_INTTYPE_DSCDONE:
 		/* Discovery done IRQ */
