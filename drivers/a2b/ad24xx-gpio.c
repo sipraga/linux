@@ -62,9 +62,9 @@ static void ad24xx_gpio_set(struct gpio_chip *gc, unsigned int offset,
 			    int value)
 {
 	struct ad24xx_gpio *adg = gpiochip_get_data(gc);
-	unsigned int reg = value ? A2B_GPIODATSET : A2B_GPIODATCLR;
 
-	regmap_write(adg->regmap, reg, BIT(offset));
+	regmap_update_bits(adg->regmap, A2B_GPIODAT, BIT(offset),
+			   value ? BIT(offset) : 0);
 }
 
 static int ad24xx_gpio_set_direction(struct ad24xx_gpio *adg,
@@ -196,9 +196,20 @@ static const struct irq_chip ad24xx_gpio_irq_chip = {
 	GPIOCHIP_IRQ_RESOURCE_HELPERS,
 };
 
+static const struct regmap_range ad24xx_gpio_regmap_volatile_regs[] = {
+	regmap_reg_range(A2B_GPIODAT, A2B_GPIODAT),
+};
+
+static const struct regmap_access_table ad24xx_gpio_regmap_volatile_table = {
+	.yes_ranges = ad24xx_gpio_regmap_volatile_regs,
+	.n_yes_ranges = ARRAY_SIZE(ad24xx_gpio_regmap_volatile_regs),
+};
+
 static const struct regmap_config ad24xx_gpio_regmap_config = {
 	.reg_bits = 8,
 	.val_bits = 8,
+	.cache_type = REGCACHE_MAPLE,
+	.volatile_table = &ad24xx_gpio_regmap_volatile_table,
 };
 
 static int ad24xx_gpio_probe(struct device *dev)
