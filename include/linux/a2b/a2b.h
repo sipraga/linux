@@ -224,6 +224,7 @@ struct a2b_node {
 	struct a2b_bus *bus;
 	unsigned int addr;
 	struct a2b_node_slots slots;
+	unsigned int last_chip; /* Last A2B_CHIP value for subordinate nodes */
 };
 
 static inline bool is_a2b_main(const struct a2b_node *node)
@@ -398,7 +399,7 @@ struct a2b_bus_ops {
 		    unsigned int reg, unsigned int *val);
 	int (*write)(struct a2b_bus *bus, const struct a2b_node *node,
 		     unsigned int reg, unsigned int val);
-	int (*i2c_xfer)(struct a2b_bus *bus, const struct a2b_node *node,
+	int (*i2c_xfer)(struct a2b_bus *bus, struct a2b_node *node,
 			struct i2c_msg *msgs, int num);
 	int (*get_inttype)(struct a2b_bus *bus, unsigned int *val);
 	struct clk *(*get_sync_clk)(struct a2b_bus *bus);

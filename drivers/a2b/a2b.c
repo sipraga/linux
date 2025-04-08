@@ -779,13 +779,8 @@ EXPORT_SYMBOL_GPL(a2b_node_write);
 int a2b_node_i2c_xfer(struct a2b_node *node, struct i2c_msg *msgs, int num)
 {
 	struct a2b_bus *bus = node->bus;
-	int ret;
 
-	mutex_lock(&bus->mutex);
-	ret = bus->ops->i2c_xfer(bus, node, msgs, num);
-	mutex_unlock(&bus->mutex);
-
-	return ret;
+	return bus->ops->i2c_xfer(bus, node, msgs, num);
 }
 EXPORT_SYMBOL_GPL(a2b_node_i2c_xfer);
 
@@ -937,6 +932,7 @@ int a2b_register_node(struct a2b_node *node)
 		goto err_enumeration_done;
 	}
 
+	node->last_chip = 0;
 	node->setup = true;
 
 	mutex_lock(&bus->mutex);

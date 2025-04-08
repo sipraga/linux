@@ -50,6 +50,9 @@ static int __ad24xx_i2c_read(struct a2b_bus *a2b_bus,
 			     unsigned int *val)
 {
 	struct ad24xx_i2c *ad = to_ad24xx_i2c(a2b_bus);
+	unsigned int nodeadr_mask = A2B_NODEADR_NODE_MASK |
+				    A2B_NODEADR_PERI_MASK |
+				    A2B_NODEADR_BRCST_MASK;
 	unsigned int nodeadr;
 	int ret;
 
@@ -63,7 +66,8 @@ static int __ad24xx_i2c_read(struct a2b_bus *a2b_bus,
 	/* Sub node access */
 	nodeadr = FIELD_PREP(A2B_NODEADR_NODE_MASK, node->addr - 1);
 
-	ret = regmap_write(ad->base_regmap, A2B_NODEADR, nodeadr);
+	ret = regmap_update_bits(ad->base_regmap, A2B_NODEADR, nodeadr_mask,
+				 nodeadr);
 	if (ret)
 		return ret;
 
@@ -86,11 +90,26 @@ static int ad24xx_i2c_read(struct a2b_bus *a2b_bus, const struct a2b_node *node,
 	return ret;
 }
 
+static bool ad24xx_reg_is_autobrcst(unsigned int reg)
+{
+	switch (reg) {
+	case A2B_SLOTFMT:
+	case A2B_DATCTL:
+	case A2B_I2SRRATE:
+		return true;
+	default:
+		return false;
+	}
+}
+
 static int __ad24xx_i2c_write(struct a2b_bus *a2b_bus,
 			      const struct a2b_node *node, unsigned int reg,
 			      unsigned int val)
 {
 	struct ad24xx_i2c *ad = to_ad24xx_i2c(a2b_bus);
+	unsigned int nodeadr_mask = A2B_NODEADR_NODE_MASK |
+				    A2B_NODEADR_PERI_MASK |
+				    A2B_NODEADR_BRCST_MASK;
 	unsigned int nodeadr;
 	int ret;
 
@@ -98,13 +117,27 @@ static int __ad24xx_i2c_write(struct a2b_bus *a2b_bus,
 		return -EACCES;
 
 	/* Main node access */
-	if (is_a2b_main(node))
+	if (is_a2b_main(node)) {
+		/*
+		 * If the main node register is Auto-Broadcast, the
+		 * A2B_NODEADR.PERI bit must be 0, otherwise the propagation to
+		 * subordinate nodes will fail.
+		 */
+		if (ad24xx_reg_is_autobrcst(reg)) {
+			ret = regmap_clear_bits(ad->base_regmap, A2B_NODEADR,
+						A2B_NODEADR_PERI_MASK);
+			if (ret)
+				return ret;
+		}
+
 		return regmap_write(ad->base_regmap, reg, val);
+	}
 
 	/* Sub node access */
 	nodeadr = FIELD_PREP(A2B_NODEADR_NODE_MASK, node->addr - 1);
 
-	ret = regmap_write(ad->base_regmap, A2B_NODEADR, nodeadr);
+	ret = regmap_update_bits(ad->base_regmap, A2B_NODEADR, nodeadr_mask,
+				 nodeadr);
 	if (ret)
 		return ret;
 
@@ -128,11 +161,15 @@ static int ad24xx_i2c_write(struct a2b_bus *a2b_bus,
 	return ret;
 }
 
-static int ad24xx_i2c_xfer(struct a2b_bus *a2b_bus, const struct a2b_node *node,
-			   struct i2c_msg *msgs, int num)
+static int __ad24xx_i2c_xfer(struct a2b_bus *a2b_bus,
+			     struct a2b_node *node, struct i2c_msg *msgs,
+			     int num)
 {
 	struct ad24xx_i2c *ad = to_ad24xx_i2c(a2b_bus);
 	struct i2c_msg msgs2[2];
+	unsigned int nodeadr_mask = A2B_NODEADR_NODE_MASK |
+				    A2B_NODEADR_PERI_MASK |
+				    A2B_NODEADR_BRCST_MASK;
 	unsigned int nodeadr;
 	int ret;
 	int i;
@@ -155,47 +192,48 @@ static int ad24xx_i2c_xfer(struct a2b_bus *a2b_bus, const struct a2b_node *node,
 		msgs2[i].addr = ad->bus_client->addr;
 	}
 
-	mutex_lock(&ad->mutex);
-
-	/* Set I2C peripheral address in subordinate node */
 	nodeadr = FIELD_PREP(A2B_NODEADR_NODE_MASK, node->addr - 1);
 
-	ret = regmap_write(ad->base_regmap, A2B_NODEADR, nodeadr);
-	if (ret)
-		goto out;
+	/* Set I2C peripheral address in subordinate node if it has changed */
+	if (node->last_chip != msgs[0].addr) {
+		ret = regmap_update_bits(ad->base_regmap, A2B_NODEADR,
+					 nodeadr_mask, nodeadr);
+		if (ret)
+			return ret;
 
-	ret = regmap_write(ad->bus_regmap, A2B_CHIP, msgs[0].addr);
-	if (ret)
-		goto out;
+		ret = regmap_write(ad->bus_regmap, A2B_CHIP, msgs[0].addr);
+		if (ret)
+			return ret;
+
+		node->last_chip = msgs[0].addr;
+	}
 
 	/* Set peripheral bit */
 	nodeadr |= FIELD_PREP(A2B_NODEADR_PERI_MASK, 1);
 
-	ret = regmap_write(ad->base_regmap, A2B_NODEADR, nodeadr);
+	ret = regmap_update_bits(ad->base_regmap, A2B_NODEADR, nodeadr_mask,
+				 nodeadr);
 	if (ret)
-		goto out;
+		return ret;
 
 	ret = i2c_transfer(ad->bus_client->adapter, msgs2, num);
-	if (ret < 0)
-		goto out;
-
-	/*
-	 * Unset peripheral bit, as when it is set, I2C writes to Auto-Broadcast
-	 * registers will otherwise always fail.
-	 */
-	nodeadr &= ~FIELD_PREP(A2B_NODEADR_PERI_MASK, 1);
-
-	ret = regmap_write(ad->base_regmap, A2B_NODEADR, nodeadr);
-	if (ret)
-		goto out;
-
-out:
-	mutex_unlock(&ad->mutex);
-
 	if (ret < 0)
 		return ret;
 
 	return num;
+}
+
+static int ad24xx_i2c_xfer(struct a2b_bus *a2b_bus, struct a2b_node *node,
+			   struct i2c_msg *msgs, int num)
+{
+	struct ad24xx_i2c *ad = to_ad24xx_i2c(a2b_bus);
+	int ret;
+
+	mutex_lock(&ad->mutex);
+	ret = __ad24xx_i2c_xfer(a2b_bus, node, msgs, num);
+	mutex_unlock(&ad->mutex);
+
+	return ret;
 }
 
 static int ad24xx_i2c_get_inttype(struct a2b_bus *a2b_bus,
@@ -394,12 +432,42 @@ static int ad24xx_i2c_bus_setup(struct ad24xx_i2c *ad)
 	return 0;
 }
 
+static const struct regmap_range ad24xx_i2c_regmap_precious_regs[] = {
+	regmap_reg_range(A2B_INTTYPE, A2B_INTTYPE),
+};
+
+static const struct regmap_access_table ad24xx_i2c_regmap_precious_table = {
+	.yes_ranges = ad24xx_i2c_regmap_precious_regs,
+	.n_yes_ranges = ARRAY_SIZE(ad24xx_i2c_regmap_precious_regs),
+};
+
+static const struct regmap_range ad24xx_i2c_regmap_volatile_regs[] = {
+	regmap_reg_range(A2B_RESPCYCS, A2B_INTPND2),
+	regmap_reg_range(A2B_BECCTL, A2B_BECNT),
+	regmap_reg_range(A2B_ERRCNT0, A2B_DISCSTAT),
+	regmap_reg_range(A2B_LINTTYPE, A2B_LINTTYPE),
+	regmap_reg_range(A2B_GPIODATSET, A2B_GPIODATCLR),
+	regmap_reg_range(A2B_GPIOIN, A2B_GPIOIN),
+	regmap_reg_range(A2B_RAISE, A2B_I2SRRATE),
+	regmap_reg_range(A2B_GPIODDAT, A2B_GPIODDAT),
+	regmap_reg_range(A2B_MBOX0STAT, A2B_MBOX0B3),
+	regmap_reg_range(A2B_MBOX1STAT, A2B_MBOX1B3),
+};
+
+static const struct regmap_access_table ad24xx_i2c_regmap_volatile_table = {
+	.yes_ranges = ad24xx_i2c_regmap_volatile_regs,
+	.n_yes_ranges = ARRAY_SIZE(ad24xx_i2c_regmap_volatile_regs),
+};
+
 static const struct regmap_config ad24xx_i2c_base_regmap_config = {
 	.disable_locking = true,
 	.reg_bits = 8,
 	.val_bits = 8,
 	.reg_stride = 1,
 	.max_register = A2B_REG_MAX,
+	.cache_type = REGCACHE_MAPLE,
+	.precious_table = &ad24xx_i2c_regmap_precious_table,
+	.volatile_table = &ad24xx_i2c_regmap_volatile_table,
 };
 
 static const struct regmap_config ad24xx_i2c_bus_regmap_config = {

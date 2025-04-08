@@ -502,20 +502,9 @@ static int ad24xx_node_setup_i2sgcfg(struct ad24xx_node *adn)
 	return regmap_write(adn->regmap, A2B_I2SGCFG, val);
 }
 
-static bool ad24xx_node_precious_reg(struct device *dev, unsigned int reg)
-{
-	switch (reg) {
-	case A2B_INTTYPE:
-		return true;
-	default:
-		return false;
-	}
-}
-
 static const struct regmap_config ad24xx_node_regmap_config = {
 	.reg_bits = 8,
 	.val_bits = 8,
-	.precious_reg = ad24xx_node_precious_reg,
 	.max_register = A2B_REG_MAX,
 };
 
