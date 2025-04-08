@@ -208,7 +208,7 @@ static const struct clk_ops ad24xx_clk_ops = {
 static const struct regmap_config ad24xx_clk_regmap_config = {
 	.reg_bits = 8,
 	.val_bits = 8,
-	.cache_type = REGCACHE_RBTREE,
+	.cache_type = REGCACHE_MAPLE,
 };
 
 static struct clk_hw *ad24xx_clk_of_get(struct of_phandle_args *clkspec, void *data)

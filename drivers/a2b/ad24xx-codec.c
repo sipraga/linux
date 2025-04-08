@@ -739,7 +739,7 @@ static const struct snd_soc_component_driver ad24xx_codec_component_drv_sub = {
 static const struct regmap_config ad24xx_codec_regmap_config = {
 	.reg_bits = 8,
 	.val_bits = 8,
-	.cache_type = REGCACHE_RBTREE,
+	.cache_type = REGCACHE_MAPLE,
 };
 
 static int ad24xx_codec_probe(struct device *dev)
