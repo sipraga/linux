@@ -269,11 +269,11 @@ static int __a2b_bus_calc_structure(struct a2b_bus *bus,
 		unsigned int num_upslots = slots->a_upslots;
 		unsigned int dnslot_activity = num_dnslots * dnslot_size;
 		unsigned int upslot_activity = num_upslots * upslot_size;
+		unsigned int n = node->addr - 1;
 		unsigned int respcycs_dn =
-			DIV_ROUND_UP(64 + dnslot_activity, 4) +
-			(4 * node->addr) + 2;
+			DIV_ROUND_UP(64 + dnslot_activity, 4) + (4 * n) + 2;
 		unsigned int respcycs_up =
-			respoffs - DIV_ROUND_UP(64 + upslot_activity, 4) + 1;
+			respoffs - (DIV_ROUND_UP(64 + upslot_activity, 4) + 1);
 
 		max_respcycs_dn = max(max_respcycs_dn, respcycs_dn);
 		min_respcycs_up = min(min_respcycs_up, respcycs_up);
