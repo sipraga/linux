@@ -197,7 +197,7 @@ static const struct irq_chip ad24xx_gpio_irq_chip = {
 };
 
 static const struct regmap_range ad24xx_gpio_regmap_volatile_regs[] = {
-	regmap_reg_range(A2B_GPIODAT, A2B_GPIODAT),
+	regmap_reg_range(A2B_GPIODAT, A2B_GPIOIN),
 };
 
 static const struct regmap_access_table ad24xx_gpio_regmap_volatile_table = {
