@@ -1,0 +1,250 @@
+CONFIGURING MUXES BEFORE DISCOVERY
+==================================
+
+We had this issue with some hardware at B&O where some A2B lines passed
+through analog muxes:
+
+                               X
+               ┌──────┐        X        ┌──────┐
+               │      │     ┌─────┐     │      │
+        ... XXX│ sub1 │XXXXX│ mux │XXXXX│ sub2 │
+               │      │     └──▲──┘     │      │
+               └──────┘        │        └──────┘
+                   │           │
+                   │ I2C       │
+                   │           │
+               ┌──────┐        │
+               │ GPIO │────────┘
+               └──────┘
+
+Subordinate nodes' device tree bindings allow specification of this mux
+resource through the mux-states property. For more information, see
+mux-consumer.yaml. In this case, discovery is deferred until sub1 has
+probed, its I2C bus is ready, the GPIO expander on that bus has probed,
+and the corresponding mux controller has probed.
+
+
+MAKING AN A2B SOUND CARD
+========================
+
+The generic machine driver a2b-audio-graph-card2 allows for easy
+construction of a DPCM-based A2B sound card. It is very similar to
+audio-graph-card2 with some exceptions:
+
+1. It uses snd_soc_card::component_chaning = 1.
+2. It uses snd_soc_card::fully_routed = 1.
+3. It is A2B aware and will only probe when initial discovery is
+   complete. Multiple A2B buses are supported.
+4. It can probe when some A2B nodes are not connected, provided the
+   minimum number of required nodes is statisfied. The minimum can be
+   configured in the device tree.
+5. Routing between A2B nodes is done automatically.
+6. Device tree properties "routing" and "aux-devs" can be specified in
+   BE port nodes, allowing for conditional application iff the A2B node
+   is discovered.
+
+Here is a basic playback example.
+
+  cpu -> a2b0 -> a2b1 -> a2b2
+                  |       |
+                  v       v
+                 dac1    dac2
+                  |       |
+                  v       v
+               speaker  speaker
+
+Suppose that the DACs are connected to the subordinate nodes' I2C controllers.
+
+In the device tree, such a card might be described as follows:
+
+  / {
+    sound {
+      compatible = "audio-graph-card2";
+      adi,a2b-bus = <&a2b>;
+      links = <&sound_sai0
+               &sound_a2b0_codec
+               &sound_dac0
+               &sound_a2b1_codec>;
+               &sound_dac1>;
+      widgets = "Speakers", "Speakers1"
+                "Speakers", "Speakers2";
+      
+      dpcm {
+        ports@0 { /* FE */
+          sound_sai0: port@0 {
+            sound_sai0_ep: endpoint {
+              remote-endpoint = <&sai0_ep>;
+            };
+          };
+        };
+        
+        ports@1 { /* BE */
+          sound_a2b0_codec: port@0 {
+            routing = "A2B0 RX0", "SAI CPU-Playback";
+  
+            sound_a2b0_codec_ep: endpoint {
+              remote-endpoint = <&a2b0_codec_ep>;
+            };
+          };
+          
+          sound_a2b1_codec: port@1 {
+            routing = "DAC1 RX", "A2B1 TX0";
+  
+            sound_a2b1_codec_ep: endpoint {
+              remote-endpoint = <&a2b1_codec_ep>;
+            };
+          };
+          
+          sound_dac1: port@2 {
+            routing = "Speakers1", "DAC1 OUT+",
+                      "Speakers1", "DAC1 OUT-",
+  
+            sound_dac1_ep: endpoint {
+              remote-endpoint = <&dac1_ep>;
+            };
+          };
+          
+          sound_a2b2_codec: port@3 {
+            routing = "DAC2 RX", "A2B2 TX0";
+  
+            sound_a2b2_codec_ep: endpoint {
+              remote-endpoint = <&a2b2_codec_ep>;
+            };
+          };
+          
+          sound_dac2: port@4 {
+            routing = "Speakers2", "DAC2 OUT+",
+                      "Speakers2", "DAC2 OUT-",
+  
+            sound_dac2_ep: endpoint {
+              remote-endpoint = <&dac2_ep>;
+            };
+          };
+        };
+      };
+    };
+    
+    /some/bus/sai@00000000 {
+      sound-name-prefix = "SAI";
+  
+      port {
+        sai0_ep: endpoint {
+          remote-endpoint = <&sound_sai0_ep>;
+        };
+      };
+    };
+    
+    /some/bus/i2c@11111111 {
+      a2b: a2b@68 {
+        node@0 {
+          codec {
+            sound-name-prefix = "A2B0";
+  
+            port {
+              a2b0_codec_ep: endpoint {
+                remote-endpoint = <&sound_a2b0_codec_ep>;
+              };
+            };
+          };
+        };
+        
+        node@1 {
+          codec {
+            sound-name-prefix = "A2B1";
+            bitclock-master;
+            frame-master;
+            
+            port {
+              a2b1_codec_ep: endpoint {
+                remote-endpoint = <&sound_a2b1_codec_ep>;
+              };
+            };
+          };
+  
+          i2c {
+            dac@59 {
+              sound-name-prefix = "DAC1";
+  
+              port {
+                dac1_ep: endpoint {
+                  remote-endpoint = <&sound_dac1_ep>;
+                };
+              };
+            };
+          };
+        };
+        
+        node@2 {
+          codec {
+            sound-name-prefix = "A2B2";
+            bitclock-master;
+            frame-master;
+            
+            port {
+              a2b2_codec_ep: endpoint {
+                remote-endpoint = <&sound_a2b2_codec_ep>;
+              };
+            };
+          };
+  
+          i2c {
+            dac@59 {
+              sound-name-prefix = "DAC2";
+  
+              port {
+                dac2_ep: endpoint {
+                  remote-endpoint = <&sound_dac2_ep>;
+                };
+              };
+            };
+          };
+        };
+      };
+    };
+  };
+
+CLOCKING
+--------
+
+A2B main nodes are clock consumers and subordinates are clock
+providers. For the a2b-audio-graph-card2 in DPCM mode, you must
+explicitly mark every clock provider in order for the correct format to
+be applied in ASoC. This is done above with the bitclock-master and
+frame-master properties.
+
+ROUTING
+-------
+
+This part is important. DPCM only works if you route a FE to a BE
+in DPCM. Otherwise, when you try to open the PCM from userspace, you
+will get some error on dmesg saying there are no available BEs.
+
+Ensure the card is fully routed correctly. Use vizdapm if in doubt, to
+check what is connected where. Don't worry about inter-A2B routing, it
+is handled automatically.
+
+CONFIGURING A2B STRUCTURE
+-------------------------
+
+This is done at runtime through kcontrols. The kcontrols have names
+analogous to the register names in the TRM, e.g. "DNSLOTS", "DNMASK0",
+etc. The kcontrols are always prepended with the A2B codec's
+sound-name-prefix as described in the device tree.
+
+Use the amixer command to set the structure via these controls as
+desired. To save and restore settings, use either the alsactl command or
+consider using the ALSA use-case manager (UCM).
+
+The structure is applied in a "greedy" manner, which is to say that as
+soon as a valid structure is detected, it will be applied. Since writing
+a whole structure involves setting multiple kcontrols, it cannot always
+be done atomically. Fortunately, structure (or partial structure) is
+applied in concordance with the DAPM power state. So if you have a
+complex structure whose intermediate steps might be invalid (due to slot
+misalignment, for example), consider adding pin switches to relevant
+widgets, or consider applying the structure only when the FEs are
+closed. This way a "partial-yet-valid" structure won't get applied,
+since the widgets will be powered off.
+
+For these more complex power sequences, UCM is an absolute must. It can
+be used to guarantee a safe transition between use-cases.
